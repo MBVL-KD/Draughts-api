@@ -15,7 +15,7 @@
  *  - DB_NAME     (optional, default "kid_draughts")
  *  - PORT        (optional, default 3000)
  */
-require("dotenv").config();
+
 const express = require("express");
 const { MongoClient } = require("mongodb");
 const { generatePDN } = require("./pdn");
