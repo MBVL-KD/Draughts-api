@@ -9,18 +9,48 @@ export async function getPlayerProfile(req, res) {
 }
 
 export async function getRecentGames(req, res) {
+
   const db = getDb();
   const userId = Number(req.params.userId);
 
-  const games = await db.collection("matches")
+  const matches = await db.collection("matches")
     .find({
-      $or: [{ whiteUserId: userId }, { blackUserId: userId }],
+      $or: [
+        { whiteUserId: userId },
+        { blackUserId: userId }
+      ]
     })
     .sort({ endedAtUnix: -1 })
     .limit(20)
     .toArray();
 
-  res.json({ ok: true, games });
+  const games = matches.map(m => {
+
+    const isWhite = m.whiteUserId === userId;
+
+    return {
+      matchId: m.matchId,
+
+      opponentUserId: isWhite ? m.blackUserId : m.whiteUserId,
+      opponentName: isWhite ? m.blackPlayerName : m.whitePlayerName,
+
+      variant: m.variant,
+      rated: m.rated,
+
+      result: m.result,
+      endReason: m.endReason,
+
+      bucket: m.ratingBucket,
+      endedAtUnix: m.endedAtUnix,
+
+      canReplay: true
+    };
+  });
+
+  res.json({
+    ok: true,
+    games
+  });
 }
 
 export async function getPlayerRatings(req, res) {
@@ -88,5 +118,49 @@ export async function getPlayerRatingSnapshot(req, res) {
       source: "player_ratings",
       updatedAtUnix: rating.updatedAtUnix || null,
     },
+  });
+}
+
+export async function getProfileSnapshot(req, res) {
+
+  const db = getDb();
+  const userId = Number(req.params.userId);
+
+  let profile = await db.collection("player_profiles")
+    .findOne({ userId });
+
+  if (!profile) {
+    profile = {
+      userId,
+      coins: 0,
+      level: 1,
+      stats: {
+        wins: 0,
+        losses: 0,
+        draws: 0
+      }
+    };
+  }
+
+  const ratings = await db.collection("player_ratings")
+    .find({ userId })
+    .toArray();
+
+  const recentMatches = await db.collection("matches")
+    .find({
+      $or: [
+        { whiteUserId: userId },
+        { blackUserId: userId }
+      ]
+    })
+    .sort({ endedAtUnix: -1 })
+    .limit(5)
+    .toArray();
+
+  res.json({
+    ok: true,
+    profile,
+    ratings,
+    recentMatches
   });
 }
