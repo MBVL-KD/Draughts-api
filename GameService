@@ -1,0 +1,843 @@
+-- ServerScriptService/Services/GameService.server.lua
+-- GameService - moves + draw/resign/undo + rematch
+-- ✅ Upgrades:
+--  - Leave seat = lose game (LEAVE_SEAT -> RESIGN)
+--  - Central handler: HandleMatchRequest usable by RemoteEvent AND server-side dashboards
+--  - Disconnect while seated => auto resign (for now)
+--  - Folder-safe board center (no GetPivot crash)
+
+local ReplicatedStorage     = game:GetService("ReplicatedStorage")
+local Players               = game:GetService("Players")
+local ServerScriptService   = game:GetService("ServerScriptService")
+local Workspace             = game:GetService("Workspace")
+
+local GameStateManager      = require(ReplicatedStorage.Modules.GameStateManager)
+local MoveValidator         = require(ServerScriptService.Modules.MoveValidator)
+local PieceSpawner          = require(ReplicatedStorage.Modules.PieceSpawnerModule)
+
+local eventsFolder          = ReplicatedStorage:WaitForChild("GameEvents")
+
+-- MOVE
+local requestDestinations   = eventsFolder:WaitForChild("RequestDestinations") -- RemoteFunction
+local requestMove           = eventsFolder:WaitForChild("RequestMove")         -- RemoteEvent
+local moveExecuted          = eventsFolder:WaitForChild("MoveExecuted")        -- RemoteEvent
+
+-- GAME STATE
+local gameStateUpdated      = eventsFolder:WaitForChild("GameStateUpdated")    -- RemoteEvent
+
+-- MATCH META
+local matchRequest          = eventsFolder:WaitForChild("MatchRequest")        -- RemoteEvent
+local matchAction           = eventsFolder:WaitForChild("MatchAction")         -- RemoteEvent
+local gameEnded             = eventsFolder:WaitForChild("GameEnded")           -- RemoteEvent
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local VARIANT    = "International"
+local BOARD_SIZE = 10
+
+local START_FEN =
+	"W:W31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50" ..
+	":B1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"
+
+local CAPTURE_VIS_DELAY = 0.8
+local LIFT_EPS = 0.03
+
+-- ============================================================
+-- STATE
+-- ============================================================
+local gameStates     = {}  -- [arenaModel] = GameStateManager instance
+local seatByArena    = {}  -- [arenaModel] = { W=Player?, B=Player? }
+local rematchByArena = {}  -- [arenaModel] = { active=true, votes={W=nil/true/false, B=nil/true/false} }
+local matchIdByArena = {}  -- [arenaModel] = integer incremented each new match
+
+-- ============================================================
+-- HELPERS (SAFE PIVOT / BOARD CENTER)
+-- ============================================================
+local function safePivotPosition(inst: Instance, fallback: Vector3): Vector3
+	if inst and (inst:IsA("Model") or inst:IsA("BasePart")) then
+		return inst:GetPivot().Position
+	end
+	if inst then
+		local p = inst:FindFirstChildWhichIsA("BasePart", true)
+		if p then return p.Position end
+	end
+	return fallback
+end
+
+local function getArenaBoardCenter(arenaModel: Model): Vector3
+	local board = arenaModel:FindFirstChild("Board")
+	if not board then
+		return arenaModel:GetPivot().Position
+	end
+
+	-- average of tiles if available
+	local sum = Vector3.zero
+	local n = 0
+	for _, ch in ipairs(board:GetChildren()) do
+		if ch:IsA("BasePart") then
+			sum += ch.Position
+			n += 1
+		end
+	end
+
+	if n > 0 then
+		return sum / n
+	end
+
+	-- folder-safe fallback
+	return safePivotPosition(board, arenaModel:GetPivot().Position)
+end
+
+local function getSpawnPart(arenaModel: Model, name: string): BasePart?
+	local spawns = arenaModel:FindFirstChild("Spawns")
+	if not spawns then return nil end
+	local p = spawns:FindFirstChild(name)
+	if p and p:IsA("BasePart") then return p end
+	return nil
+end
+
+local function faceToward(hrp: BasePart, targetPos: Vector3)
+	local from = hrp.Position
+	local flatTarget = Vector3.new(targetPos.X, from.Y, targetPos.Z)
+	hrp.CFrame = CFrame.lookAt(from, flatTarget)
+end
+
+local function teleportCharacterToSpawn(player: Player, arenaModel: Model)
+	local char = player.Character
+	if not char then return end
+
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not (hrp and hrp:IsA("BasePart")) then return end
+
+	local side = player:GetAttribute("Side") -- "W","B","S"
+	local spawnName =
+		(side == "W") and "Spawn_W"
+		or (side == "B") and "Spawn_B"
+		or "Spawn_S"
+
+	local sp = getSpawnPart(arenaModel, spawnName)
+	if not sp then
+		warn("❌ Missing spawn:", spawnName, "in", arenaModel:GetFullName())
+		return
+	end
+
+	local boardCenter = getArenaBoardCenter(arenaModel)
+
+	hrp.CFrame = sp.CFrame + Vector3.new(0, 3, 0)
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+
+	faceToward(hrp, boardCenter)
+end
+
+local function teleportAllSeated(arenaModel: Model)
+	local seats = seatByArena[arenaModel]
+	if not seats then return end
+
+	if seats.W then teleportCharacterToSpawn(seats.W, arenaModel) end
+	if seats.B then teleportCharacterToSpawn(seats.B, arenaModel) end
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr:GetAttribute("Side") == "S" then
+			teleportCharacterToSpawn(plr, arenaModel)
+		end
+	end
+end
+
+-- ============================================================
+-- GENERIC HELPERS
+-- ============================================================
+local function getArena_001()
+	local islands = Workspace:FindFirstChild("Islands")
+	if not islands then return nil end
+	local intl = islands:FindFirstChild("InternationalIsland")
+	if not intl then return nil end
+	local arena = intl:FindFirstChild("Arena_001")
+	if arena and arena:IsA("Model") then return arena end
+	return nil
+end
+
+local function GetOrCreateGameState(arenaModel: Model)
+	if not gameStates[arenaModel] then
+		gameStates[arenaModel] = GameStateManager.new(arenaModel, VARIANT)
+		gameStates[arenaModel]:SetFEN(START_FEN)
+	end
+	return gameStates[arenaModel]
+end
+
+local function getTurnFromFEN(fen: string)
+	if type(fen) ~= "string" or #fen == 0 then return "W" end
+	local t = fen:sub(1,1)
+	return (t == "W" or t == "B") and t or "W"
+end
+
+local function broadcastGameState(arenaModel: Model, gameState)
+	local currentFEN = gameState:GetFEN()
+	local turn = getTurnFromFEN(currentFEN)
+
+	gameStateUpdated:FireAllClients(arenaModel, {
+		turn = turn,
+		currentTurn = turn,
+		sideToMove = turn,
+		fen = currentFEN,
+		moveNumber = gameState.moveNumber or 0,
+		status = gameState.status or "playing",
+		winner = gameState.winner,
+	})
+end
+
+local function rebuildPiecesFromFEN(arenaModel: Model, fen: string)
+	local pieces = arenaModel:FindFirstChild("Pieces")
+	if pieces then pieces:Destroy() end
+	PieceSpawner:SpawnPieces(arenaModel, fen, BOARD_SIZE)
+end
+
+-- ============================================================
+-- SEATS
+-- ============================================================
+local function assignSeat(arenaModel: Model, player: Player)
+	seatByArena[arenaModel] = seatByArena[arenaModel] or { W = nil, B = nil }
+	local seats = seatByArena[arenaModel]
+
+	if not seats.W then
+		seats.W = player
+		player:SetAttribute("Side", "W")
+		print("♟️ Assigned WHITE to", player.Name)
+		return "W"
+	elseif not seats.B then
+		seats.B = player
+		player:SetAttribute("Side", "B")
+		print("♟️ Assigned BLACK to", player.Name)
+		return "B"
+	else
+		player:SetAttribute("Side", "S")
+		print("👀 Spectator:", player.Name)
+		return "S"
+	end
+end
+
+local function removeSeat(arenaModel: Model, player: Player)
+	local seats = seatByArena[arenaModel]
+	if not seats then return end
+	if seats.W == player then seats.W = nil end
+	if seats.B == player then seats.B = nil end
+end
+
+local function getPlayerColor(player: Player)
+	local c = player:GetAttribute("Side")
+	if c == "W" or c == "B" then return c end
+	return nil
+end
+
+local function getOpponentPlayer(arenaModel: Model, player: Player)
+	local seats = seatByArena[arenaModel]
+	if not seats then return nil end
+	if seats.W == player then return seats.B end
+	if seats.B == player then return seats.W end
+	return nil
+end
+
+local function swapSeats(arenaModel: Model)
+	local seats = seatByArena[arenaModel]
+	if not seats then return end
+	seats.W, seats.B = seats.B, seats.W
+	if seats.W then seats.W:SetAttribute("Side", "W") end
+	if seats.B then seats.B:SetAttribute("Side", "B") end
+end
+
+-- ============================================================
+-- RESET / REMATCH
+-- ============================================================
+local function resetGameStateForNewMatch(arenaModel: Model)
+	local gs = GetOrCreateGameState(arenaModel)
+
+	matchIdByArena[arenaModel] = (matchIdByArena[arenaModel] or 0) + 1
+	rematchByArena[arenaModel] = nil
+
+	gs.status = "playing"
+	gs.winner = nil
+	gs.moveHistory = {}
+	gs.lastMove = nil
+	gs.moveNumber = 1
+
+	if typeof(gs.ClearOffers) == "function" then
+		gs:ClearOffers()
+	else
+		gs.drawOffer = nil
+		gs.undoRequest = nil
+	end
+
+	gs:SetFEN(START_FEN)
+end
+
+local function canSwapSeats(arenaModel)
+	local seats = seatByArena[arenaModel]
+	return seats and seats.W and seats.B
+end
+
+local function startNewMatch(arenaModel, doSwap)
+	if doSwap and canSwapSeats(arenaModel) then
+		swapSeats(arenaModel)
+	else
+		local seats = seatByArena[arenaModel]
+		if seats and seats.W and not seats.B then
+			seats.W:SetAttribute("Side","W")
+		elseif seats and seats.B and not seats.W then
+			seats.B:SetAttribute("Side","W")
+			seats.W = seats.B
+			seats.B = nil
+		end
+	end
+
+	resetGameStateForNewMatch(arenaModel)
+
+	local gs = GetOrCreateGameState(arenaModel)
+	rebuildPiecesFromFEN(arenaModel, gs:GetFEN())
+
+	teleportAllSeated(arenaModel)
+
+	broadcastGameState(arenaModel, gs)
+	matchAction:FireAllClients(arenaModel, { type="REMATCH_STARTED" })
+
+	task.wait(0.15)
+	broadcastGameState(arenaModel, gs)
+end
+
+local function StartRematchFlow(arenaModel: Model)
+	local seats = seatByArena[arenaModel]
+	if not seats or not seats.W or not seats.B then
+		return
+	end
+
+	rematchByArena[arenaModel] = {
+		active = true,
+		votes = { W = nil, B = nil }
+	}
+
+	matchAction:FireClient(seats.W, arenaModel, { type="REMATCH_PROMPT" })
+	matchAction:FireClient(seats.B, arenaModel, { type="REMATCH_PROMPT" })
+end
+
+local function EndMatchAndPromptRematch(arenaModel: Model, result)
+	local gs = GetOrCreateGameState(arenaModel)
+
+	if result.outcome == "draw" then
+		if typeof(gs.SetGameOver) == "function" then
+			gs:SetGameOver("draw")
+		else
+			gs.status = "draw"
+			gs.winner = nil
+		end
+	else
+		if typeof(gs.SetGameOver) == "function" then
+			gs:SetGameOver(result.winner)
+		else
+			gs.status = (result.winner == "W") and "white_wins" or "black_wins"
+			gs.winner = result.winner
+		end
+	end
+
+	gameEnded:FireAllClients(arenaModel, result)
+	StartRematchFlow(arenaModel)
+end
+
+-- ============================================================
+-- KING PROMOTION CHECK (FEN-based)
+-- ============================================================
+local function isPieceKingInFEN(fen: string, squareId: number, color: string)
+	if type(fen) ~= "string" then return false end
+
+	local parts = {}
+	for part in fen:gmatch("[^:]+") do
+		table.insert(parts, part)
+	end
+	if #parts < 3 then return false end
+
+	local piecePart = (color == "W") and parts[2] or parts[3]
+	if not piecePart then return false end
+
+	local kingPattern = "K" .. tostring(squareId)
+	if piecePart:match(kingPattern .. ",") or piecePart:match(kingPattern .. "$") or piecePart:match("^" .. kingPattern) then
+		return true
+	end
+	return false
+end
+
+local function promoteToKing(pieceModel: Model)
+	pieceModel:SetAttribute("IsKing", true)
+end
+
+local function getPieceColor(pieceModel: Model)
+	if pieceModel.PrimaryPart then
+		local c = pieceModel.PrimaryPart:GetAttribute("Color")
+		if c == "W" or c == "B" then return c end
+		local sv = pieceModel.PrimaryPart:FindFirstChild("PieceColor")
+		if sv and sv:IsA("StringValue") and (sv.Value == "W" or sv.Value == "B") then
+			return sv.Value
+		end
+	end
+	local name = pieceModel.Name
+	if name:match("Piece_W") or name:match("_W_") then return "W" end
+	if name:match("Piece_B") or name:match("_B_") then return "B" end
+	return nil
+end
+
+-- ============================================================
+-- PHYSICAL UPDATES
+-- ============================================================
+local function getSquarePartById(arenaModel: Model, squareId: number): BasePart?
+	local boardModel = arenaModel:FindFirstChild("Board")
+	if not boardModel then return nil end
+
+	for _, sq in ipairs(boardModel:GetChildren()) do
+		if sq:IsA("BasePart") then
+			local sid = sq:FindFirstChild("SquareId")
+			if sid and sid:IsA("ValueBase") and tonumber(sid.Value) == squareId then
+				return sq
+			end
+		end
+	end
+	return nil
+end
+
+local function snapPiecePrimaryOnSquareTop(pieceModel: Model, squarePart: BasePart)
+	if not pieceModel or not pieceModel.PrimaryPart or not squarePart then return end
+	local pp = pieceModel.PrimaryPart
+	local tileTopY = squarePart.Position.Y + (squarePart.Size.Y * 0.5)
+
+	local _, _, _, r00,r01,r02, r10,r11,r12, r20,r21,r22 = pp.CFrame:GetComponents()
+	local rotOnly = CFrame.fromMatrix(
+		Vector3.new(0,0,0),
+		Vector3.new(r00,r10,r20),
+		Vector3.new(r01,r11,r21),
+		Vector3.new(r02,r12,r22)
+	)
+
+	local verticalHalf = pp.Size.X * 0.5
+	local y = tileTopY + verticalHalf + LIFT_EPS
+	pp.CFrame = CFrame.new(squarePart.Position.X, y, squarePart.Position.Z) * rotOnly
+end
+
+local function UpdatePhysicalPieces(arenaModel: Model, fromSquare, toSquare, captures, newFEN, capturedPieces)
+	local myMatchId = matchIdByArena[arenaModel] or 0
+
+	local pieceToMove = PieceSpawner:GetPieceOnSquare(arenaModel, fromSquare)
+	if pieceToMove and pieceToMove.PrimaryPart then
+		local sqPart = getSquarePartById(arenaModel, toSquare)
+		if sqPart then
+			local currentSquareValue = pieceToMove.PrimaryPart:FindFirstChild("CurrentSquare")
+			if currentSquareValue then
+				currentSquareValue.Value = toSquare
+			end
+
+			pieceToMove.PrimaryPart:SetAttribute("Square", toSquare)
+			snapPiecePrimaryOnSquareTop(pieceToMove, sqPart)
+
+			local color = getPieceColor(pieceToMove)
+			if color then
+				local isKingNow = isPieceKingInFEN(newFEN, toSquare, color)
+				if isKingNow and not pieceToMove:GetAttribute("IsKing") then
+					promoteToKing(pieceToMove)
+				end
+			end
+		end
+	end
+
+	for _, victim in ipairs(capturedPieces or {}) do
+		if victim and victim.Parent then
+			victim:SetAttribute("Captured", true)
+			if victim.PrimaryPart then
+				victim.PrimaryPart:SetAttribute("Captured", true)
+			end
+
+			task.delay(CAPTURE_VIS_DELAY, function()
+				if (matchIdByArena[arenaModel] or 0) ~= myMatchId then return end
+				if victim and victim.Parent then
+					victim:Destroy()
+				end
+			end)
+		end
+	end
+end
+
+-- ============================================================
+-- REQUEST DESTINATIONS
+-- ============================================================
+requestDestinations.OnServerInvoke = function(player, arenaModel, fromSquare)
+	if not arenaModel or not fromSquare then return {} end
+
+	local gs = GetOrCreateGameState(arenaModel)
+	if gs.status and gs.status ~= "playing" then
+		return {}
+	end
+
+	local pColor = getPlayerColor(player)
+	if not pColor then
+		return {}
+	end
+
+	return MoveValidator:GetLegalDestinations(gs:GetFEN(), fromSquare, VARIANT)
+end
+
+-- ============================================================
+-- REQUEST MOVE
+-- ============================================================
+requestMove.OnServerEvent:Connect(function(player, arenaModel, fromSquare, toSquare)
+	if not arenaModel or not fromSquare or not toSquare then return end
+
+	local gs = GetOrCreateGameState(arenaModel)
+	if typeof(gs.IsGameOver) == "function" and gs:IsGameOver() then return end
+	if gs.status and gs.status ~= "playing" then return end
+
+	local pColor = getPlayerColor(player)
+	if not pColor then return end
+
+	local oldFEN = gs:GetFEN()
+	local turn = getTurnFromFEN(oldFEN)
+	if pColor ~= turn then
+		return
+	end
+
+	local success, newFEN, captures, path =
+		MoveValidator:ExecuteMove(oldFEN, fromSquare, toSquare, VARIANT)
+
+	if not success then
+		warn("❌ Illegal move", fromSquare, "→", toSquare)
+		return
+	end
+
+	captures = captures or {}
+	path = path or {}
+
+	if typeof(gs.ClearOffers) == "function" then
+		gs:ClearOffers()
+	else
+		gs.drawOffer = nil
+		gs.undoRequest = nil
+	end
+
+	local capturedPieces = {}
+	for _, capturedSquare in ipairs(captures) do
+		local victim = PieceSpawner:GetPieceOnSquare(arenaModel, capturedSquare)
+		if victim then table.insert(capturedPieces, victim) end
+	end
+
+	if typeof(gs.RecordMove) == "function" then
+		gs:RecordMove({
+			from = fromSquare,
+			to = toSquare,
+			oldFEN = oldFEN,
+			newFEN = newFEN,
+			captures = captures,
+			path = path,
+			playerName = player.Name,
+			moverColor = turn,
+		})
+	else
+		gs:SetFEN(newFEN)
+		gs.moveNumber = (gs.moveNumber or 0) + 1
+	end
+
+	moveExecuted:FireAllClients(arenaModel, {
+		from = fromSquare,
+		to = toSquare,
+		captures = captures,
+		path = path,
+		newFEN = newFEN,
+		toMove = getTurnFromFEN(newFEN),
+		moveNumber = gs.moveNumber,
+	})
+
+	UpdatePhysicalPieces(arenaModel, fromSquare, toSquare, captures, newFEN, capturedPieces)
+	broadcastGameState(arenaModel, gs)
+
+	if not MoveValidator:HasLegalMoves(newFEN, VARIANT) then
+		local loser = getTurnFromFEN(newFEN)
+		local winner = (loser == "W") and "B" or "W"
+		EndMatchAndPromptRematch(arenaModel, { outcome="win", winner=winner, reason="no_legal_moves" })
+	end
+end)
+
+-- ============================================================
+-- MATCH REQUESTS (CENTRAL HANDLER)
+-- ============================================================
+
+local function HandleMatchRequest(player: Player, arenaModel: Model, payload: table, source: string?)
+	if not arenaModel or type(payload) ~= "table" then return end
+
+	local gs = GetOrCreateGameState(arenaModel)
+
+	local pColor = getPlayerColor(player)
+	if not pColor then
+		matchAction:FireClient(player, arenaModel, { type="ERROR", code="NOT_SEATED" })
+		return
+	end
+
+	local actionType = payload.type
+	if type(actionType) ~= "string" then return end
+
+	-- ✅ Leave seat = lose game (for now)
+	if actionType == "LEAVE_SEAT" then
+		actionType = "RESIGN"
+	end
+	-- ✅ Dashboard uses LEAVE_SPECTATE; seated players clicking that also lose
+	if actionType == "LEAVE_SPECTATE" and pColor then
+		-- if spectator: you may later teleport away; for now treat seated as resign
+		if player:GetAttribute("Side") ~= "S" then
+			actionType = "RESIGN"
+		else
+			-- spectator leave: for now just set side neutral; teleport handled elsewhere if you want
+			player:SetAttribute("Side", "None")
+			matchAction:FireClient(player, arenaModel, { type="LEFT_SPECTATE" })
+			return
+		end
+	end
+
+	local opponent = getOpponentPlayer(arenaModel, player)
+
+	local function requireOpponent()
+		if not opponent then
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code="NO_OPPONENT" })
+			return false
+		end
+		return true
+	end
+
+	if actionType == "DRAW_OFFER" then
+		if gs.status and gs.status ~= "playing" then return end
+		if not requireOpponent() then return end
+
+		local ok, err = true, nil
+		if typeof(gs.OfferDraw) == "function" then
+			ok, err = gs:OfferDraw(pColor, player.UserId)
+		end
+
+		if ok then
+			matchAction:FireClient(opponent, arenaModel, { type="DRAW_OFFERED", fromColor=pColor })
+			matchAction:FireClient(player, arenaModel, { type="DRAW_OFFER_SENT" })
+		else
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code=err or "DRAW_OFFER_FAILED" })
+		end
+		return
+	end
+
+	if actionType == "DRAW_ACCEPT" then
+		if gs.status and gs.status ~= "playing" then return end
+
+		local ok, err = true, nil
+		if typeof(gs.AcceptDraw) == "function" then
+			ok, err = gs:AcceptDraw(pColor)
+		end
+
+		if ok then
+			matchAction:FireAllClients(arenaModel, { type="DRAW_ACCEPTED" })
+			EndMatchAndPromptRematch(arenaModel, { outcome="draw", winner=nil, reason="draw_agreed" })
+		else
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code=err or "DRAW_ACCEPT_FAILED" })
+		end
+		return
+	end
+
+	if actionType == "RESIGN" then
+		if gs.status and gs.status ~= "playing" then return end
+
+		local ok, winnerOrErr = true, ((pColor == "W") and "B" or "W")
+		if typeof(gs.Resign) == "function" then
+			ok, winnerOrErr = gs:Resign(pColor)
+		end
+
+		if ok then
+			matchAction:FireAllClients(arenaModel, { type="RESIGNED", color=pColor })
+			EndMatchAndPromptRematch(arenaModel, { outcome="win", winner=winnerOrErr, reason="resign" })
+		else
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code=winnerOrErr or "RESIGN_FAILED" })
+		end
+		return
+	end
+
+	if actionType == "UNDO_REQUEST" then
+		if gs.status and gs.status ~= "playing" then return end
+		if not requireOpponent() then return end
+
+		local ok, dataOrErr = true, nil
+		if typeof(gs.RequestUndo) == "function" then
+			ok, dataOrErr = gs:RequestUndo(pColor, player.UserId)
+		end
+
+		if ok then
+			matchAction:FireClient(opponent, arenaModel, { type="UNDO_REQUESTED", fromColor=pColor })
+			matchAction:FireClient(player, arenaModel, { type="UNDO_REQUEST_SENT" })
+		else
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code=dataOrErr or "UNDO_REQUEST_FAILED" })
+		end
+		return
+	end
+
+	if actionType == "UNDO_ACCEPT" then
+		if gs.status and gs.status ~= "playing" then return end
+
+		local ok, fenOrErr = true, nil
+		if typeof(gs.AcceptUndo) == "function" then
+			ok, fenOrErr = gs:AcceptUndo(pColor)
+		else
+			ok, fenOrErr = false, "NO_ACCEPTUNDO_METHOD"
+		end
+
+		if ok then
+			rebuildPiecesFromFEN(arenaModel, fenOrErr)
+			broadcastGameState(arenaModel, gs)
+			matchAction:FireAllClients(arenaModel, { type="UNDO_ACCEPTED" })
+		else
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code=fenOrErr or "UNDO_ACCEPT_FAILED" })
+		end
+		return
+	end
+
+	if actionType == "REMATCH_YES" or actionType == "REMATCH_NO" then
+		local rm = rematchByArena[arenaModel]
+		if not rm or not rm.active then
+			matchAction:FireClient(player, arenaModel, { type="ERROR", code="NO_REMATCH_ACTIVE" })
+			return
+		end
+
+		rm.votes[pColor] = (actionType == "REMATCH_YES")
+
+		local seats = seatByArena[arenaModel]
+		if seats then
+			if seats.W then matchAction:FireClient(seats.W, arenaModel, { type="REMATCH_VOTE", side=pColor, vote=rm.votes[pColor] }) end
+			if seats.B then matchAction:FireClient(seats.B, arenaModel, { type="REMATCH_VOTE", side=pColor, vote=rm.votes[pColor] }) end
+		end
+
+		if rm.votes.W == false or rm.votes.B == false then
+			rm.active = false
+			rematchByArena[arenaModel] = nil
+			local seats2 = seatByArena[arenaModel]
+			if seats2 then
+				if seats2.W then matchAction:FireClient(seats2.W, arenaModel, { type="REMATCH_DECLINED" }) end
+				if seats2.B then matchAction:FireClient(seats2.B, arenaModel, { type="REMATCH_DECLINED" }) end
+			end
+			return
+		end
+
+		if rm.votes.W == true and rm.votes.B == true then
+			rm.active = false
+			rematchByArena[arenaModel] = nil
+			startNewMatch(arenaModel, true)
+		end
+		return
+	end
+
+	if actionType == "UNDO_DECLINE" then
+		if typeof(gs.ClearOffers) == "function" then gs:ClearOffers() end
+		if opponent then matchAction:FireClient(opponent, arenaModel, { type="UNDO_DECLINED" }) end
+		matchAction:FireClient(player, arenaModel, { type="UNDO_DECLINE_SENT" })
+		return
+	end
+
+	if actionType == "DRAW_DECLINE" then
+		if typeof(gs.ClearOffers) == "function" then gs:ClearOffers() end
+		if opponent then matchAction:FireClient(opponent, arenaModel, { type="DRAW_DECLINED" }) end
+		matchAction:FireClient(player, arenaModel, { type="DRAW_DECLINE_SENT" })
+		return
+	end
+end
+
+-- VERWIJDER (of comment) deze blokken:
+-- local function HandleMatchRequestInternal(...) end
+-- _G.GameService._HandleMatchRequestInternal = ...
+-- matchRequest.OnServerEvent:Connect(function(...) HandleMatchRequestInternal(...) end)
+-- function _G.GameService.HandleMatchRequest(...) ... end
+
+-- EN DOE DIT:
+
+matchRequest.OnServerEvent:Connect(function(player, arenaModel, payload)
+	HandleMatchRequest(player, arenaModel, payload, "Remote")
+end)
+
+-- (optioneel) als je server-side dashboards later willen callen:
+_G.GameService = _G.GameService or {}
+_G.GameService.HandleMatchRequest = HandleMatchRequest
+-- ============================================================
+-- PLAYER MANAGEMENT (teleport always)
+-- ============================================================
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function()
+		task.wait(0.2)
+		local arena2 = Workspace.Islands.InternationalIsland:FindFirstChild("Arena_001")
+		if arena2 then
+			teleportCharacterToSpawn(player, arena2)
+		end
+	end)
+
+	task.wait(0.2)
+	local arena = Workspace.Islands.InternationalIsland:FindFirstChild("Arena_001")
+	if arena then
+		assignSeat(arena, player)
+
+		if player.Character then
+			task.defer(function()
+				teleportCharacterToSpawn(player, arena)
+			end)
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	-- ✅ If seated and game is playing: treat disconnect as resign (for now)
+	for arenaModel, seats in pairs(seatByArena) do
+		if seats and (seats.W == player or seats.B == player) then
+			local gs = gameStates[arenaModel]
+			if gs and (not gs.status or gs.status == "playing") then
+				local side = player:GetAttribute("Side")
+				if side == "W" or side == "B" then
+					-- call same logic path
+					pcall(function()
+						HandleMatchRequest(player, arenaModel, { type="RESIGN" }, "Disconnect")
+					end)
+				end
+			end
+			removeSeat(arenaModel, player)
+		else
+			removeSeat(arenaModel, player)
+		end
+	end
+end)
+
+-- ============================================================
+-- INIT
+-- ============================================================
+task.wait(2)
+
+local arena = getArena_001()
+if arena then
+	matchIdByArena[arena] = 1
+	seatByArena[arena] = seatByArena[arena] or { W=nil, B=nil }
+	local gs = GetOrCreateGameState(arena)
+
+	gs:SetFEN(START_FEN)
+	gs.status = "playing"
+	gs.winner = nil
+	gs.moveNumber = gs.moveNumber or 1
+
+	local existingPieces = arena:FindFirstChild("Pieces")
+	local hasAny = existingPieces and #existingPieces:GetChildren() > 0
+
+	if not hasAny then
+		rebuildPiecesFromFEN(arena, gs:GetFEN())
+	end
+
+	broadcastGameState(arena, gs)
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		task.defer(function()
+			teleportCharacterToSpawn(plr, arena)
+		end)
+	end
+
+	print(("✅ GameService ready for %s (%s)"):format(arena.Name, VARIANT))
+else
+	warn("❌ Arena_001 not found for GameService init.")
+end
+
+print("✅ GameService: Ready (moves + draw/resign/undo + rematch)")

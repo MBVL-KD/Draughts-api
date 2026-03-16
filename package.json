@@ -1,15 +1,17 @@
 {
-  "name": "kid-draughts-api",
+  "name": "kid-draughts-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": "20.x"
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "mongodb": "^6.7.0"
+    "mongodb": "^6.15.0",
+    "zod": "^3.23.8"
   }
 }

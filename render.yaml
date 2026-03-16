@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: kid-draughts-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_DB_NAME
+        value: kid_draughts
+      - key: MONGODB_URI
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
