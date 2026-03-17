@@ -6,7 +6,7 @@ import playerSyncRoutes from "./routes/player-sync.routes.js";
 import playerRoutes from "./routes/players.routes.js";
 
 app.use("/api/player", playerSyncRoutes);
-app.use("/api/players", playerRoutes);
+app.use("/api", playerRoutes);
 
 async function start() {
   await connectMongo();
