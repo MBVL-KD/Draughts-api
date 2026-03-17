@@ -3,16 +3,14 @@ import { getDb } from "../config/mongo.js";
 export async function syncPlayer(req, res) {
   const db = getDb();
 
-  const {
-    userId,
-    username,
-    displayName
-  } = req.body;
+  const userId = Number(req.body.userId);
+  const username = String(req.body.username || "");
+  const displayName = String(req.body.displayName || "");
 
-  if (!userId) {
+  if (!Number.isFinite(userId) || userId <= 0) {
     return res.status(400).json({
       ok: false,
-      error: "MISSING_USERID"
+      error: "BAD_USER_ID"
     });
   }
 
@@ -32,6 +30,7 @@ export async function syncPlayer(req, res) {
         coins: 0,
         level: 1,
         xp: 0,
+        badges: [],
         createdAtUnix: now,
         firstSeenAtUnix: now,
         stats: {
