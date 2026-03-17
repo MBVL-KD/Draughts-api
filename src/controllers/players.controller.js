@@ -18,7 +18,7 @@ function normalizeString(value, fallback = null) {
 }
 
 function normalizePlayerName(name, fallback) {
-  return typeof name === "string" && name.trim() !== "" ? name.trim() : fallback;
+  return typeof name === "string" && name.trim() !== "" ? name : fallback;
 }
 
 function escapeRegex(text) {
@@ -36,27 +36,19 @@ function normalizeTimeControl(matchDoc) {
     toSafeNumber(tc?.minutes) ??
     toSafeNumber(tc?.initialMinutes) ??
     toSafeNumber(tc?.baseMin) ??
-    toSafeNumber(tc?.base) ??
-    toSafeNumber(tc?.startMinutes) ??
     toSafeNumber(matchDoc?.baseMinutes) ??
     toSafeNumber(matchDoc?.minutes) ??
     toSafeNumber(matchDoc?.initialMinutes) ??
     toSafeNumber(matchDoc?.baseMin) ??
-    toSafeNumber(matchDoc?.base) ??
-    toSafeNumber(matchDoc?.startMinutes) ??
     0;
 
   const incrementSeconds =
     toSafeNumber(tc?.incrementSeconds) ??
     toSafeNumber(tc?.increment) ??
     toSafeNumber(tc?.inc) ??
-    toSafeNumber(tc?.incrementSec) ??
-    toSafeNumber(tc?.bonusSeconds) ??
     toSafeNumber(matchDoc?.incrementSeconds) ??
     toSafeNumber(matchDoc?.increment) ??
     toSafeNumber(matchDoc?.inc) ??
-    toSafeNumber(matchDoc?.incrementSec) ??
-    toSafeNumber(matchDoc?.bonusSeconds) ??
     0;
 
   return {
@@ -66,12 +58,12 @@ function normalizeTimeControl(matchDoc) {
 }
 
 function buildTimeControlLabel(matchDoc) {
-  const explicitLabel = normalizeString(matchDoc?.timeControlLabel);
-  if (explicitLabel) {
-    return explicitLabel;
+  const tc = normalizeTimeControl(matchDoc);
+
+  if (typeof matchDoc?.timeControlLabel === "string" && matchDoc.timeControlLabel.trim() !== "") {
+    return matchDoc.timeControlLabel.trim();
   }
 
-  const tc = normalizeTimeControl(matchDoc);
   if (tc.baseMinutes > 0 || tc.incrementSeconds > 0) {
     return `${tc.baseMinutes}+${tc.incrementSeconds}`;
   }
@@ -333,7 +325,7 @@ function buildRecentGamesQuery(userId, query = {}) {
     $or: [{ whiteUserId: userId }, { blackUserId: userId }],
   };
 
-  const before = toSafeNumber(query.before) ?? toSafeNumber(query.cursor);
+  const before = toSafeNumber(query.before);
   if (before !== null) {
     mongoQuery.endedAtUnix = { $lt: before };
   }
@@ -438,7 +430,7 @@ export async function getRecentGames(req, res) {
             ? false
             : null,
       bucket: normalizeString(req.query.bucket, null),
-      before: toSafeNumber(req.query.before) ?? toSafeNumber(req.query.cursor),
+      before: toSafeNumber(req.query.before),
     },
   });
 }
