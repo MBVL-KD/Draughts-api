@@ -3,9 +3,10 @@ import { Router } from "express";
 import {
   getPlayerProfile,
   getRecentGames,
+  getMatchDetails,
   getPlayerRatings,
   getPlayerRatingSnapshot,
-  getProfileSnapshot
+  getProfileSnapshot,
 } from "../controllers/players.controller.js";
 
 const router = Router();
