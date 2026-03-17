@@ -288,6 +288,10 @@ function mapMatchDetails(matchDoc) {
         : {},
 
     canReplay: canReplayMatch(matchDoc),
+    gameDef:
+      matchDoc && typeof matchDoc.gameDef === "object" && matchDoc.gameDef
+        ? matchDoc.gameDef
+        : null,
   };
 }
 
