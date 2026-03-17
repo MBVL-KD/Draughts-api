@@ -10,10 +10,12 @@ import {
 
 const router = Router();
 
-router.get("/:userId/profile", getPlayerProfile);
-router.get("/:userId/profile-snapshot", getProfileSnapshot);
-router.get("/:userId/recent-games", getRecentGames);
-router.get("/:userId/ratings", getPlayerRatings);
-router.get("/:userId/rating-snapshot", getPlayerRatingSnapshot);
+router.get("/players/:userId/profile", getPlayerProfile);
+router.get("/players/:userId/recent-games", getRecentGames);
+router.get("/players/:userId/ratings", getPlayerRatings);
+router.get("/players/:userId/rating-snapshot", getPlayerRatingSnapshot);
+router.get("/players/:userId/profile-snapshot", getProfileSnapshot);
+
+router.get("/matches/:matchId", getMatchDetails);
 
 export default router;
