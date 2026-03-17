@@ -13,6 +13,18 @@ function isValidUserId(userId) {
   return Number.isFinite(userId) && userId > 0;
 }
 
+function normalizeString(value, fallback = null) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
+}
+
+function normalizePlayerName(name, fallback) {
+  return typeof name === "string" && name.trim() !== "" ? name : fallback;
+}
+
+function escapeRegex(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function normalizeTimeControl(matchDoc) {
   const tc =
     matchDoc && typeof matchDoc.timeControl === "object" && matchDoc.timeControl
@@ -23,9 +35,11 @@ function normalizeTimeControl(matchDoc) {
     toSafeNumber(tc?.baseMinutes) ??
     toSafeNumber(tc?.minutes) ??
     toSafeNumber(tc?.initialMinutes) ??
+    toSafeNumber(tc?.baseMin) ??
     toSafeNumber(matchDoc?.baseMinutes) ??
     toSafeNumber(matchDoc?.minutes) ??
     toSafeNumber(matchDoc?.initialMinutes) ??
+    toSafeNumber(matchDoc?.baseMin) ??
     0;
 
   const incrementSeconds =
@@ -41,6 +55,20 @@ function normalizeTimeControl(matchDoc) {
     baseMinutes,
     incrementSeconds,
   };
+}
+
+function buildTimeControlLabel(matchDoc) {
+  const tc = normalizeTimeControl(matchDoc);
+
+  if (typeof matchDoc?.timeControlLabel === "string" && matchDoc.timeControlLabel.trim() !== "") {
+    return matchDoc.timeControlLabel.trim();
+  }
+
+  if (tc.baseMinutes > 0 || tc.incrementSeconds > 0) {
+    return `${tc.baseMinutes}+${tc.incrementSeconds}`;
+  }
+
+  return null;
 }
 
 function getMoveCount(matchDoc) {
@@ -71,10 +99,6 @@ function canReplayMatch(matchDoc) {
   );
 }
 
-function normalizePlayerName(name, fallback) {
-  return typeof name === "string" && name.trim() !== "" ? name : fallback;
-}
-
 function mapMatchForUser(matchDoc, userId) {
   const whiteUserId = toSafeNumber(matchDoc?.whiteUserId);
   const blackUserId = toSafeNumber(matchDoc?.blackUserId);
@@ -82,8 +106,15 @@ function mapMatchForUser(matchDoc, userId) {
   const isWhite = whiteUserId === userId;
   const isBlack = blackUserId === userId;
 
-  const whitePlayerName = normalizePlayerName(matchDoc?.whitePlayerName, "White");
-  const blackPlayerName = normalizePlayerName(matchDoc?.blackPlayerName, "Black");
+  const whitePlayerName = normalizePlayerName(
+    matchDoc?.whiteDisplayName || matchDoc?.whitePlayerName,
+    "White"
+  );
+
+  const blackPlayerName = normalizePlayerName(
+    matchDoc?.blackDisplayName || matchDoc?.blackPlayerName,
+    "Black"
+  );
 
   const opponentUserId = isWhite
     ? blackUserId
@@ -113,17 +144,23 @@ function mapMatchForUser(matchDoc, userId) {
 
     variant: matchDoc?.variant || null,
     ruleset: matchDoc?.ruleset || null,
+    scenario: matchDoc?.scenario || null,
     rated: matchDoc?.rated === true,
 
     result: matchDoc?.result || null,
-    endReason: matchDoc?.endReason || null,
+
+    endReason: matchDoc?.classifiedEndReason || matchDoc?.endReason || null,
+    rawEndReason: matchDoc?.endReason || null,
+    classifiedEndReason: matchDoc?.classifiedEndReason || null,
 
     bucket: matchDoc?.ratingBucket || matchDoc?.bucket || null,
     ratingBucket: matchDoc?.ratingBucket || matchDoc?.bucket || null,
 
     startedAtUnix:
       toSafeNumber(matchDoc?.startedAtUnix) ??
+      toSafeNumber(matchDoc?.startedAt) ??
       toSafeNumber(matchDoc?.createdAtUnix) ??
+      toSafeNumber(matchDoc?.createdAt) ??
       null,
 
     endedAtUnix: toSafeNumber(matchDoc?.endedAtUnix) ?? null,
@@ -135,9 +172,120 @@ function mapMatchForUser(matchDoc, userId) {
     timeControl,
     baseMinutes: timeControl.baseMinutes,
     incrementSeconds: timeControl.incrementSeconds,
+    timeControlLabel: buildTimeControlLabel(matchDoc),
 
     gladiatorWhite: matchDoc?.gladiatorWhite === true,
     gladiatorBlack: matchDoc?.gladiatorBlack === true,
+
+    canReplay: canReplayMatch(matchDoc),
+  };
+}
+
+function mapMatchDetails(matchDoc) {
+  const whitePlayerName = normalizePlayerName(
+    matchDoc?.whiteDisplayName || matchDoc?.whitePlayerName,
+    "White"
+  );
+
+  const blackPlayerName = normalizePlayerName(
+    matchDoc?.blackDisplayName || matchDoc?.blackPlayerName,
+    "Black"
+  );
+
+  const timeControl = normalizeTimeControl(matchDoc);
+
+  return {
+    matchId: matchDoc?.matchId || null,
+    arenaId: matchDoc?.arenaId || null,
+    tournamentId: matchDoc?.tournamentId || null,
+    roundId: matchDoc?.roundId || null,
+    tournamentSessionId: matchDoc?.tournamentSessionId || null,
+    lessonId: matchDoc?.lessonId || null,
+
+    whiteUserId: toSafeNumber(matchDoc?.whiteUserId),
+    blackUserId: toSafeNumber(matchDoc?.blackUserId),
+    whitePlayerName,
+    blackPlayerName,
+
+    variant: matchDoc?.variant || null,
+    ruleset: matchDoc?.ruleset || null,
+    scenario: matchDoc?.scenario || null,
+    rated: matchDoc?.rated === true,
+    mode: matchDoc?.mode || null,
+    matchKind: matchDoc?.matchKind || null,
+
+    result: matchDoc?.result || null,
+    outcome: matchDoc?.outcome || null,
+    winnerSide: matchDoc?.winnerSide || null,
+    winnerUserId: toSafeNumber(matchDoc?.winnerUserId),
+
+    endReason: matchDoc?.classifiedEndReason || matchDoc?.endReason || null,
+    rawEndReason: matchDoc?.endReason || null,
+    classifiedEndReason: matchDoc?.classifiedEndReason || null,
+
+    bucket: matchDoc?.ratingBucket || matchDoc?.bucket || null,
+    ratingBucket: matchDoc?.ratingBucket || matchDoc?.bucket || null,
+
+    startedAtUnix:
+      toSafeNumber(matchDoc?.startedAtUnix) ??
+      toSafeNumber(matchDoc?.startedAt) ??
+      toSafeNumber(matchDoc?.createdAtUnix) ??
+      toSafeNumber(matchDoc?.createdAt) ??
+      null,
+
+    endedAtUnix: toSafeNumber(matchDoc?.endedAtUnix) ?? null,
+    durationSec: toSafeNumber(matchDoc?.durationSec, 0),
+
+    moveCount: getMoveCount(matchDoc),
+    plyCount: toSafeNumber(matchDoc?.plyCount),
+
+    moveList: Array.isArray(matchDoc?.moveList) ? matchDoc.moveList : [],
+    fenHistory: Array.isArray(matchDoc?.fenHistory) ? matchDoc.fenHistory : [],
+
+    startFen: matchDoc?.startFen || matchDoc?.initialFen || null,
+    initialFen: matchDoc?.initialFen || matchDoc?.startFen || null,
+    finalFen: matchDoc?.finalFen || null,
+
+    captures:
+      matchDoc && typeof matchDoc.captures === "object" && matchDoc.captures
+        ? {
+            W: toSafeNumber(matchDoc.captures.W, 0),
+            B: toSafeNumber(matchDoc.captures.B, 0),
+          }
+        : { W: 0, B: 0 },
+
+    timeControl,
+    baseMinutes: timeControl.baseMinutes,
+    incrementSeconds: timeControl.incrementSeconds,
+    timeControlLabel: buildTimeControlLabel(matchDoc),
+
+    gladiatorWhite: matchDoc?.gladiatorWhite === true,
+    gladiatorBlack: matchDoc?.gladiatorBlack === true,
+
+    countsForRatings: matchDoc?.countsForRatings === true,
+    countsForStandings: matchDoc?.countsForStandings === true,
+    countsForProfileStats: matchDoc?.countsForProfileStats !== false,
+    countsForTournamentScore: matchDoc?.countsForTournamentScore === true,
+
+    whiteRatingBefore: toSafeNumber(matchDoc?.whiteRatingBefore),
+    whiteRdBefore: toSafeNumber(matchDoc?.whiteRdBefore),
+    whiteVolatilityBefore: toSafeNumber(matchDoc?.whiteVolatilityBefore),
+    whiteProvisionalBefore: matchDoc?.whiteProvisionalBefore === true,
+
+    blackRatingBefore: toSafeNumber(matchDoc?.blackRatingBefore),
+    blackRdBefore: toSafeNumber(matchDoc?.blackRdBefore),
+    blackVolatilityBefore: toSafeNumber(matchDoc?.blackVolatilityBefore),
+    blackProvisionalBefore: matchDoc?.blackProvisionalBefore === true,
+
+    flags:
+      matchDoc && typeof matchDoc.flags === "object" && matchDoc.flags
+        ? matchDoc.flags
+        : {},
+
+    meta:
+      matchDoc && typeof matchDoc.meta === "object" && matchDoc.meta
+        ? matchDoc.meta
+        : {},
 
     canReplay: canReplayMatch(matchDoc),
   };
@@ -170,6 +318,44 @@ function calculateStatsForUser(matches, userId) {
     losses,
     draws,
   };
+}
+
+function buildRecentGamesQuery(userId, query = {}) {
+  const mongoQuery = {
+    $or: [{ whiteUserId: userId }, { blackUserId: userId }],
+  };
+
+  const before = toSafeNumber(query.before);
+  if (before !== null) {
+    mongoQuery.endedAtUnix = { $lt: before };
+  }
+
+  const variant = normalizeString(query.variant, "");
+  if (variant) {
+    mongoQuery.variant = {
+      $regex: new RegExp(`^${escapeRegex(variant)}$`, "i"),
+    };
+  }
+
+  const bucket = normalizeString(query.bucket, "");
+  if (bucket) {
+    mongoQuery.$orBucket = undefined;
+    mongoQuery.$and = mongoQuery.$and || [];
+    mongoQuery.$and.push({
+      $or: [
+        { ratingBucket: { $regex: new RegExp(`^${escapeRegex(bucket)}$`, "i") } },
+        { bucket: { $regex: new RegExp(`^${escapeRegex(bucket)}$`, "i") } },
+      ],
+    });
+  }
+
+  if (query.rated === "true") {
+    mongoQuery.rated = true;
+  } else if (query.rated === "false") {
+    mongoQuery.rated = false;
+  }
+
+  return mongoQuery;
 }
 
 /* =========================================================
@@ -206,20 +392,71 @@ export async function getRecentGames(req, res) {
     });
   }
 
+  const limitRaw = toSafeNumber(req.query.limit, 20);
+  const limit = Math.max(1, Math.min(50, limitRaw || 20));
+
+  const mongoQuery = buildRecentGamesQuery(userId, req.query);
+
   const matches = await db
     .collection("matches")
-    .find({
-      $or: [{ whiteUserId: userId }, { blackUserId: userId }],
-    })
-    .sort({ endedAtUnix: -1 })
-    .limit(20)
+    .find(mongoQuery)
+    .sort({ endedAtUnix: -1, _id: -1 })
+    .limit(limit + 1)
     .toArray();
 
-  const games = matches.map((matchDoc) => mapMatchForUser(matchDoc, userId));
+  const hasMore = matches.length > limit;
+  const pageMatches = hasMore ? matches.slice(0, limit) : matches;
+
+  const games = pageMatches.map((matchDoc) => mapMatchForUser(matchDoc, userId));
+
+  const lastMatch = pageMatches.length > 0 ? pageMatches[pageMatches.length - 1] : null;
+  const nextCursor = hasMore ? toSafeNumber(lastMatch?.endedAtUnix) : null;
 
   return res.json({
     ok: true,
     games,
+    paging: {
+      limit,
+      hasMore,
+      nextCursor,
+    },
+    filters: {
+      variant: normalizeString(req.query.variant, null),
+      rated:
+        req.query.rated === "true"
+          ? true
+          : req.query.rated === "false"
+            ? false
+            : null,
+      bucket: normalizeString(req.query.bucket, null),
+      before: toSafeNumber(req.query.before),
+    },
+  });
+}
+
+export async function getMatchDetails(req, res) {
+  const db = getDb();
+  const matchId = normalizeString(req.params.matchId, "");
+
+  if (!matchId) {
+    return res.status(400).json({
+      ok: false,
+      error: "MISSING_MATCH_ID",
+    });
+  }
+
+  const matchDoc = await db.collection("matches").findOne({ matchId });
+
+  if (!matchDoc) {
+    return res.status(404).json({
+      ok: false,
+      error: "MATCH_NOT_FOUND",
+    });
+  }
+
+  return res.json({
+    ok: true,
+    match: mapMatchDetails(matchDoc),
   });
 }
 
@@ -345,7 +582,7 @@ export async function getProfileSnapshot(req, res) {
     .find({
       $or: [{ whiteUserId: userId }, { blackUserId: userId }],
     })
-    .sort({ endedAtUnix: -1 })
+    .sort({ endedAtUnix: -1, _id: -1 })
     .limit(20)
     .toArray();
 
