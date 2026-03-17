@@ -10,7 +10,7 @@ function toSafeNumber(value, fallback = null) {
 }
 
 function isValidUserId(userId) {
-  return Number.isFinite(userId) && userId > 0;
+  return Number.isFinite(userId) && userId !== 0;
 }
 
 function normalizeString(value, fallback = null) {
