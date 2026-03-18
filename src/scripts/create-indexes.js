@@ -1,4 +1,4 @@
-import { connectMongo } from "../src/config/mongo.js";
+import { connectMongo } from "../config/mongo.js";
 
 const db = await connectMongo();
 
