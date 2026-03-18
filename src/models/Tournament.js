@@ -66,6 +66,45 @@ const TournamentSchema = new mongoose.Schema(
     recentMatches: { type: Array, default: [] },
     matchHistory: { type: Array, default: [] },
 
+    finalizedAt: Number,
+  },
+  { timestamps: true }
+);
+
+const Tournament = mongoose.models.Tournament || mongoose.model("Tournament", TournamentSchema);
+
+export default Tournament;    endAt: Number,
+
+    scheduleKey: String,
+    scheduleBucket: String,
+
+    islandTemplate: String,
+    islandArenaId: String,
+    islandModelName: String,
+
+    playerCounts: {
+      spectators: Number,
+      participants: Number,
+      queued: Number,
+      inMatch: Number,
+      left: Number,
+      total: Number,
+    },
+
+    stats: {
+      joins: Number,
+      leaves: Number,
+      matchesPlayed: Number,
+      spectatorJoins: Number,
+      participantJoins: Number,
+      queueJoins: Number,
+    },
+
+    standings: { type: Array, default: [] },
+    liveMatches: { type: Array, default: [] },
+    recentMatches: { type: Array, default: [] },
+    matchHistory: { type: Array, default: [] },
+
     // 🔥 EXTRA (handig)
     finalizedAt: Number,
   },
