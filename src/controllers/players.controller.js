@@ -361,6 +361,93 @@ function buildRecentGamesQuery(userId, query = {}) {
   return mongoQuery;
 }
 
+function buildRecentTournamentsQuery(userId, query = {}) {
+  const mongoQuery = {
+    recordType: "tournament_snapshot",
+    status: "ended",
+    "standings.userId": userId,
+  };
+
+  const before = toSafeNumber(query.before);
+  if (before !== null) {
+    mongoQuery.endAt = { $lt: before };
+  }
+
+  const variant = normalizeString(query.variant, "");
+  if (variant) {
+    mongoQuery.variantId = {
+      $regex: new RegExp(`^${escapeRegex(variant)}$`, "i"),
+    };
+  }
+
+  const rated = normalizeString(query.rated, "");
+  if (rated === "true") {
+    mongoQuery.rated = true;
+  } else if (rated === "false") {
+    mongoQuery.rated = false;
+  }
+
+  return mongoQuery;
+}
+
+function mapTournamentSnapshotForUser(tournamentDoc, userId) {
+  const standings = Array.isArray(tournamentDoc?.standings) ? tournamentDoc.standings : [];
+  const standing = standings.find((s) => toSafeNumber(s?.userId) === userId) || null;
+
+  return {
+    tournamentId: normalizeString(tournamentDoc?.id, null),
+    id: normalizeString(tournamentDoc?.id, null),
+
+    title: normalizeString(tournamentDoc?.name, "Tournament"),
+    name: normalizeString(tournamentDoc?.name, "Tournament"),
+
+    variantId: normalizeString(tournamentDoc?.variantId, "International"),
+    variant: normalizeString(tournamentDoc?.variantId, "International"),
+    timeClass: normalizeString(tournamentDoc?.timeClass, "Blitz"),
+
+    place:
+      toSafeNumber(standing?.rank) ??
+      toSafeNumber(standing?.place) ??
+      toSafeNumber(standing?.finalRank),
+
+    rank:
+      toSafeNumber(standing?.rank) ??
+      toSafeNumber(standing?.place) ??
+      toSafeNumber(standing?.finalRank),
+
+    finalRank:
+      toSafeNumber(standing?.finalRank) ??
+      toSafeNumber(standing?.rank) ??
+      toSafeNumber(standing?.place),
+
+    points: toSafeNumber(standing?.points, 0),
+    games: toSafeNumber(standing?.games, 0),
+    wins: toSafeNumber(standing?.wins, 0),
+    draws: toSafeNumber(standing?.draws, 0),
+    losses: toSafeNumber(standing?.losses, 0),
+
+    endedAtUnix:
+      toSafeNumber(tournamentDoc?.endAt) ??
+      toSafeNumber(tournamentDoc?.updatedAt) ??
+      toSafeNumber(tournamentDoc?.finalizedAt) ??
+      null,
+
+    startAtUnix: toSafeNumber(tournamentDoc?.startAt) ?? null,
+
+    status: normalizeString(tournamentDoc?.status, null),
+    templateId: normalizeString(tournamentDoc?.templateId, null),
+    templateKey: normalizeString(tournamentDoc?.templateKey, null),
+    rulesetId: normalizeString(tournamentDoc?.rulesetId, null),
+    scenarioId: normalizeString(tournamentDoc?.scenarioId, null),
+    rated: tournamentDoc?.rated === true,
+
+    playerName: normalizePlayerName(
+      standing?.displayName || standing?.playerName,
+      "Player"
+    ),
+  };
+}
+
 /* =========================================================
    Controllers
 ========================================================= */
@@ -434,6 +521,60 @@ export async function getRecentGames(req, res) {
             ? false
             : null,
       bucket: normalizeString(req.query.bucket, null),
+      before: toSafeNumber(req.query.before),
+    },
+  });
+}
+
+export async function getRecentTournaments(req, res) {
+  const db = getDb();
+  const userId = Number(req.params.userId);
+
+  if (!isValidUserId(userId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "BAD_USER_ID",
+    });
+  }
+
+  const limitRaw = toSafeNumber(req.query.limit, 12);
+  const limit = Math.max(1, Math.min(50, limitRaw || 12));
+
+  const mongoQuery = buildRecentTournamentsQuery(userId, req.query);
+
+  const docs = await db
+    .collection("tournaments")
+    .find(mongoQuery)
+    .sort({ endAt: -1, _id: -1 })
+    .limit(limit + 1)
+    .toArray();
+
+  const hasMore = docs.length > limit;
+  const pageDocs = hasMore ? docs.slice(0, limit) : docs;
+
+  const tournaments = pageDocs.map((doc) => mapTournamentSnapshotForUser(doc, userId));
+
+  const lastDoc = pageDocs.length > 0 ? pageDocs[pageDocs.length - 1] : null;
+  const nextCursor = hasMore ? toSafeNumber(lastDoc?.endAt) : null;
+
+  return res.json({
+    ok: true,
+    tournaments,
+    nextCursor,
+    hasMore,
+    paging: {
+      limit,
+      hasMore,
+      nextCursor,
+    },
+    filters: {
+      variant: normalizeString(req.query.variant, null),
+      rated:
+        req.query.rated === "true"
+          ? true
+          : req.query.rated === "false"
+            ? false
+            : null,
       before: toSafeNumber(req.query.before),
     },
   });
@@ -599,10 +740,25 @@ export async function getProfileSnapshot(req, res) {
     })
     .toArray();
 
+  const recentTournamentsRaw = await db
+    .collection("tournaments")
+    .find({
+      recordType: "tournament_snapshot",
+      status: "ended",
+      "standings.userId": userId,
+    })
+    .sort({ endAt: -1, _id: -1 })
+    .limit(10)
+    .toArray();
+
   const stats = calculateStatsForUser(countedMatches, userId);
 
   const recentMatches = recentMatchesRaw.map((matchDoc) =>
     mapMatchForUser(matchDoc, userId)
+  );
+
+  const recentTournaments = recentTournamentsRaw.map((doc) =>
+    mapTournamentSnapshotForUser(doc, userId)
   );
 
   const mergedProfile = {
@@ -628,5 +784,6 @@ export async function getProfileSnapshot(req, res) {
     profile: mergedProfile,
     ratings,
     recentMatches,
+    recentTournaments,
   });
 }
