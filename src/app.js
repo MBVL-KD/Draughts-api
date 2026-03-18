@@ -18,8 +18,8 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/player", playerSyncRoutes);
+app.use("/api", playersRouter)
 app.use("/api/matches", matchesRouter);
-app.use("/api/players", playersRouter);
 app.use("/api/leaderboards", leaderboardsRouter);
 app.use("/api/tournaments", tournamentsRouter);
 
