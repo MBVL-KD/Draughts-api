@@ -49,7 +49,6 @@ export async function patchProfilesFromMatch(payload) {
           badges: [],
           createdAtUnix: now,
           firstSeenAtUnix: now,
-          recentMatchIds: [],
         },
         $set: setDoc,
         $inc: {
