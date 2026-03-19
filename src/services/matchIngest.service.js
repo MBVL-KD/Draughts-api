@@ -51,11 +51,7 @@ export async function ingestFinalizedMatch(body) {
   const db = getDb();
   const matches = db.collection("matches");
 
-  const existing = await matches.findOne(
-    { matchId: payload.matchId },
-    { projection: { _id: 1, processedAtUnix: 1 } }
-  );
-
+  const existing = await matches.findOne({ matchId: payload.matchId }, { projection: { _id: 1, processedAtUnix: 1 } });
   if (existing) {
     return {
       ok: true,
@@ -73,7 +69,6 @@ export async function ingestFinalizedMatch(body) {
   });
 
   const ratingResult = await applyRatedMatchIfNeeded(payload);
-
   await patchProfilesFromMatch({
     ...payload,
     ...ratingResult.matchPatch,
