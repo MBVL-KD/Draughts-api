@@ -35,19 +35,18 @@ export async function patchProfilesFromMatch(payload) {
           badges: [],
           createdAtUnix: now,
           firstSeenAtUnix: now,
-          stats: {
-            gamesTotal: 0,
-            wins: 0,
-            losses: 0,
-            draws: 0,
-          },
-          totals: {
-            wins: 0,
-            draws: 0,
-            losses: 0,
-            ratedGames: 0,
-            casualGames: 0,
-          },
+          lastSeenAtUnix: now,
+
+          "stats.gamesTotal": 0,
+          "stats.wins": 0,
+          "stats.losses": 0,
+          "stats.draws": 0,
+
+          "totals.wins": 0,
+          "totals.draws": 0,
+          "totals.losses": 0,
+          "totals.ratedGames": 0,
+          "totals.casualGames": 0,
         },
         $set: {
           updatedAtUnix: now,
@@ -60,6 +59,28 @@ export async function patchProfilesFromMatch(payload) {
                   provisional: ratingDoc.provisional,
                   ratedGames: ratingDoc.ratedGames,
                 },
+              }
+            : {}),
+        },
+        $inc: {
+          "totals.wins": won ? 1 : 0,
+          "totals.draws": drew ? 1 : 0,
+          "totals.losses": lost ? 1 : 0,
+          "totals.ratedGames": payload.rated ? 1 : 0,
+          "totals.casualGames": payload.rated ? 0 : 1,
+        },
+        $push: {
+          recentMatchIds: {
+            $each: [payload.matchId],
+            $position: 0,
+            $slice: 20,
+          },
+        },
+      },
+      { upsert: true }
+    );
+  }
+}                },
               }
             : {}),
         },
