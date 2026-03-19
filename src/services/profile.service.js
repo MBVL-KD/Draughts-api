@@ -27,8 +27,32 @@ export async function patchProfilesFromMatch(payload) {
     await profiles.updateOne(
       { userId },
       {
+        $setOnInsert: {
+          userId,
+          coins: 0,
+          level: 1,
+          xp: 0,
+          badges: [],
+          createdAtUnix: now,
+          firstSeenAtUnix: now,
+          lastSeenAtUnix: now,
+          stats: {
+            gamesTotal: 0,
+            wins: 0,
+            losses: 0,
+            draws: 0,
+          },
+          totals: {
+            wins: 0,
+            draws: 0,
+            losses: 0,
+            ratedGames: 0,
+            casualGames: 0,
+          },
+        },
         $set: {
           updatedAtUnix: now,
+          lastSeenAtUnix: now,
           ...(ratingDoc
             ? {
                 [`ratings.${bucket}`]: {
