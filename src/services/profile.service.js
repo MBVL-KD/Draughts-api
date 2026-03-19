@@ -35,7 +35,6 @@ export async function patchProfilesFromMatch(payload) {
           badges: [],
           createdAtUnix: now,
           firstSeenAtUnix: now,
-          lastSeenAtUnix: now,
           stats: {
             gamesTotal: 0,
             wins: 0,
