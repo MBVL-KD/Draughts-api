@@ -80,26 +80,4 @@ export async function patchProfilesFromMatch(payload) {
       { upsert: true }
     );
   }
-}                },
-              }
-            : {}),
-        },
-        $inc: {
-          "totals.wins": won ? 1 : 0,
-          "totals.draws": drew ? 1 : 0,
-          "totals.losses": lost ? 1 : 0,
-          "totals.ratedGames": payload.rated ? 1 : 0,
-          "totals.casualGames": payload.rated ? 0 : 1,
-        },
-        $push: {
-          recentMatchIds: {
-            $each: [payload.matchId],
-            $position: 0,
-            $slice: 20,
-          },
-        },
-      },
-      { upsert: true }
-    );
-  }
 }
