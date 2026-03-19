@@ -19,10 +19,24 @@ export async function patchProfilesFromMatch(payload) {
     const won =
       payload.outcome === "win" &&
       ((side === "white" && payload.winnerSide === "W") ||
-        (side === "black" && payload.winnerSide === "B"));
+       (side === "black" && payload.winnerSide === "B"));
 
     const drew = payload.outcome === "draw";
     const lost = payload.outcome === "win" && !won;
+
+    const setDoc = {
+      updatedAtUnix: now,
+      lastSeenAtUnix: now,
+    };
+
+    if (ratingDoc && bucket) {
+      setDoc[`ratings.${bucket}`] = {
+        rating: ratingDoc.rating,
+        rd: ratingDoc.rd,
+        provisional: ratingDoc.provisional,
+        ratedGames: ratingDoc.ratedGames,
+      };
+    }
 
     await profiles.updateOne(
       { userId },
@@ -35,34 +49,9 @@ export async function patchProfilesFromMatch(payload) {
           badges: [],
           createdAtUnix: now,
           firstSeenAtUnix: now,
-          stats: {
-            gamesTotal: 0,
-            wins: 0,
-            losses: 0,
-            draws: 0,
-          },
-          totals: {
-            wins: 0,
-            draws: 0,
-            losses: 0,
-            ratedGames: 0,
-            casualGames: 0,
-          },
+          recentMatchIds: [],
         },
-        $set: {
-          updatedAtUnix: now,
-          lastSeenAtUnix: now,
-          ...(ratingDoc
-            ? {
-                [`ratings.${bucket}`]: {
-                  rating: ratingDoc.rating,
-                  rd: ratingDoc.rd,
-                  provisional: ratingDoc.provisional,
-                  ratedGames: ratingDoc.ratedGames,
-                },
-              }
-            : {}),
-        },
+        $set: setDoc,
         $inc: {
           "totals.wins": won ? 1 : 0,
           "totals.draws": drew ? 1 : 0,
