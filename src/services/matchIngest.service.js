@@ -50,8 +50,13 @@ export async function ingestFinalizedMatch(body) {
 
   const db = getDb();
   const matches = db.collection("matches");
+  const now = Math.floor(Date.now() / 1000);
 
-  const existing = await matches.findOne({ matchId: payload.matchId }, { projection: { _id: 1, processedAtUnix: 1 } });
+  const existing = await matches.findOne(
+    { matchId: payload.matchId },
+    { projection: { _id: 1, processedAtUnix: 1 } }
+  );
+
   if (existing) {
     return {
       ok: true,
@@ -64,31 +69,48 @@ export async function ingestFinalizedMatch(body) {
 
   await matches.insertOne({
     ...payload,
-    receivedAtUnix: Math.floor(Date.now() / 1000),
+    receivedAtUnix: now,
     processedAtUnix: null,
+    processingError: null,
   });
 
-  const ratingResult = await applyRatedMatchIfNeeded(payload);
-  await patchProfilesFromMatch({
-    ...payload,
-    ...ratingResult.matchPatch,
-  });
+  try {
+    const ratingResult = await applyRatedMatchIfNeeded(payload);
 
-  await matches.updateOne(
-    { matchId: payload.matchId },
-    {
-      $set: {
-        ...ratingResult.matchPatch,
-        processedAtUnix: Math.floor(Date.now() / 1000),
-      },
-    }
-  );
+    await patchProfilesFromMatch({
+      ...payload,
+      ...ratingResult.matchPatch,
+    });
 
-  return {
-    ok: true,
-    matchId: payload.matchId,
-    stored: true,
-    alreadyProcessed: false,
-    ratingProcessed: ratingResult.ratingProcessed,
-  };
+    await matches.updateOne(
+      { matchId: payload.matchId },
+      {
+        $set: {
+          ...ratingResult.matchPatch,
+          processedAtUnix: Math.floor(Date.now() / 1000),
+          processingError: null,
+        },
+      }
+    );
+
+    return {
+      ok: true,
+      matchId: payload.matchId,
+      stored: true,
+      alreadyProcessed: false,
+      ratingProcessed: ratingResult.ratingProcessed,
+    };
+  } catch (err) {
+    await matches.updateOne(
+      { matchId: payload.matchId },
+      {
+        $set: {
+          processingError: String(err?.message || err),
+          processingFailedAtUnix: Math.floor(Date.now() / 1000),
+        },
+      }
+    );
+
+    throw err;
+  }
 }
