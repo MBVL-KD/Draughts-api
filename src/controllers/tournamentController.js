@@ -10,13 +10,7 @@ function parseLimit(raw, fallback = 20, max = 50) {
 }
 
 function buildTournamentListQuery(queryParams = {}) {
-  const {
-    status,
-    variantId,
-    timeClass,
-    cursorUpdatedAt,
-    cursorId,
-  } = queryParams;
+  const { status, variantId, timeClass, cursorUpdatedAt, cursorId } = queryParams;
 
   const query = {
     "stats.matchesPlayed": { $gt: 0 },
@@ -34,12 +28,7 @@ function buildTournamentListQuery(queryParams = {}) {
     query.timeClass = timeClass.trim();
   }
 
-  if (
-    cursorUpdatedAt !== undefined &&
-    cursorUpdatedAt !== null &&
-    cursorId !== undefined &&
-    cursorId !== null
-  ) {
+  if (cursorUpdatedAt !== undefined && cursorUpdatedAt !== null && cursorId !== undefined && cursorId !== null) {
     const ts = Number(cursorUpdatedAt);
     const id = String(cursorId);
 
@@ -77,40 +66,30 @@ function sanitizeTournamentForList(doc) {
     id: doc.id,
     recordType: doc.recordType,
     recordVersion: doc.recordVersion,
-
     templateKey: doc.templateKey,
     templateId: doc.templateId,
-
     name: doc.name,
     system: doc.system,
-
     variantId: doc.variantId,
     rulesetId: doc.rulesetId,
     scenarioId: doc.scenarioId,
-
     timeClass: doc.timeClass,
     timeControl: doc.timeControl,
-
     frequency: doc.frequency,
     rated: doc.rated,
     allowSpectators: doc.allowSpectators,
     allowAI: doc.allowAI,
-
     status: doc.status,
     isFinal: doc.isFinal,
-
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
     startAt: doc.startAt,
     endAt: doc.endAt,
-
     scheduleKey: doc.scheduleKey,
     scheduleBucket: doc.scheduleBucket,
-
     islandTemplate: doc.islandTemplate,
     islandArenaId: doc.islandArenaId,
     islandModelName: doc.islandModelName,
-
     playerCounts: doc.playerCounts,
     stats: doc.stats,
   };

@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "migrate:content": "node src/scripts/migrate-content-to-kid-draughts.js",
+    "backfill:variant-id": "node src/scripts/backfill-puzzle-variant-id.js",
+    "sync:test-to-kid": "MIGRATION_SOURCE_DB=test MIGRATION_TARGET_DB=kid_draughts node src/scripts/migrate-content-to-kid-draughts.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

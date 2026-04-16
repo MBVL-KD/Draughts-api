@@ -7,6 +7,7 @@ import playersRouter from "./routes/players.routes.js";
 import leaderboardsRouter from "./routes/leaderboards.routes.js";
 import playerSyncRoutes from "./routes/player-sync.routes.js";
 import tournamentsRouter from "./routes/tournaments.js";
+import puzzlesRoutes from "./routes/puzzles.routes.js";
 
 const app = express();
 
@@ -22,5 +23,6 @@ app.use("/api", playersRouter)
 app.use("/api/matches", matchesRouter);
 app.use("/api/leaderboards", leaderboardsRouter);
 app.use("/api/tournaments", tournamentsRouter);
+app.use("/v1/puzzles", puzzlesRoutes);
 
 export default app;
