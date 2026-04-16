@@ -1,0 +1,25 @@
+name: Keep Warm Services
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-services:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Draughts API health
+        run: |
+          set -e
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://draughts-api.onrender.com/health")
+          echo "draughts-api status=${code}"
+          test "${code}" = "200"
+
+      - name: Ping Draughts Studio health
+        run: |
+          set -e
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://draughts-studio.onrender.com/health")
+          echo "draughts-studio status=${code}"
+          test "${code}" = "200"
