@@ -15,6 +15,10 @@ function normalizePlayerId(playerId) {
   return String(playerId);
 }
 
+function normalizeVariantId(variantId) {
+  return String(variantId || "").trim().toLowerCase();
+}
+
 function seededUnit(seedInput) {
   const hash = createHash("sha256").update(seedInput).digest("hex");
   const int = parseInt(hash.slice(0, 12), 16);
@@ -127,7 +131,8 @@ export async function getNextPuzzle(input) {
 
   const db = getDb();
   const playerId = normalizePlayerId(input.playerId);
-  const profile = await getOrCreateProfile(db, playerId, input.variantId);
+  const normalizedVariantId = normalizeVariantId(input.variantId);
+  const profile = await getOrCreateProfile(db, playerId, normalizedVariantId);
   const playerRating = Number(profile?.globalRating || PLAYER_DEFAULT_RATING);
   const window = RATING_WINDOWS[input.mode];
   const minRating = playerRating + window.minDelta;
@@ -139,7 +144,7 @@ export async function getNextPuzzle(input) {
     const excludedIds = buildExcludedSet(profile?.recentPuzzleIds || [], pass, input.excludePuzzleIds || []);
     const query = {
       active: true,
-      "meta.variantId": input.variantId,
+      "meta.variantId": normalizedVariantId,
       "rating.value": { $gte: minRating, $lte: maxRating },
       puzzleId: { $nin: excludedIds },
     };
@@ -162,7 +167,7 @@ export async function getNextPuzzle(input) {
     weight: Math.max(0.01, scoreCandidate(puzzle, playerRating)),
   }));
   const rngUnit = input.debug && input.seed
-    ? seededUnit(`${input.seed}:${playerId}:${input.variantId}:${candidates.length}`)
+    ? seededUnit(`${input.seed}:${playerId}:${normalizedVariantId}:${candidates.length}`)
     : Math.random();
   const shuffled = [...scored].sort((a, b) => b.weight - a.weight);
   const picked = weightedPick(scored, rngUnit)?.puzzle;

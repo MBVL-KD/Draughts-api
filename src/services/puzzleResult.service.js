@@ -11,6 +11,10 @@ function normalizePlayerId(playerId) {
   return String(playerId);
 }
 
+function normalizeVariantId(variantId) {
+  return String(variantId || "").trim().toLowerCase();
+}
+
 function expectedScore(playerRating, puzzleRating) {
   return 1 / (1 + Math.pow(10, (puzzleRating - playerRating) / 400));
 }
@@ -48,6 +52,7 @@ export async function submitPuzzleResult(input) {
 
   const db = getDb();
   const playerId = normalizePlayerId(input.playerId);
+  const normalizedVariantId = normalizeVariantId(input.variantId);
   const attempts = db.collection("puzzle_attempts");
 
   const existingAttempt = await attempts.findOne({ attemptId: input.attemptId });
@@ -65,18 +70,18 @@ export async function submitPuzzleResult(input) {
   if (!puzzle) {
     return { error: { status: 404, body: { ok: false, error: "PUZZLE_NOT_FOUND" } } };
   }
-  if (puzzle?.meta?.variantId !== input.variantId) {
+  if (normalizeVariantId(puzzle?.meta?.variantId) !== normalizedVariantId) {
     return { error: { status: 400, body: { ok: false, error: "VARIANT_MISMATCH" } } };
   }
 
   const profiles = db.collection("player_puzzle_profiles");
   const nowUnix = Math.floor(Date.now() / 1000);
   await profiles.updateOne(
-    { playerId, variantId: input.variantId },
+    { playerId, variantId: normalizedVariantId },
     {
       $setOnInsert: {
         playerId,
-        variantId: input.variantId,
+        variantId: normalizedVariantId,
         globalRating: PLAYER_DEFAULT_RATING,
         provisional: true,
         recentPuzzleIds: [],
@@ -86,7 +91,7 @@ export async function submitPuzzleResult(input) {
     },
     { upsert: true }
   );
-  const profile = await profiles.findOne({ playerId, variantId: input.variantId });
+  const profile = await profiles.findOne({ playerId, variantId: normalizedVariantId });
 
   const playerRatingBefore = Number(profile?.globalRating || PLAYER_DEFAULT_RATING);
   const puzzleRatingBefore = Number(puzzle?.rating?.value || PLAYER_DEFAULT_RATING);
@@ -108,7 +113,7 @@ export async function submitPuzzleResult(input) {
     sessionId: input.sessionId,
     puzzleId: input.puzzleId,
     mode: input.mode,
-    variantId: input.variantId,
+    variantId: normalizedVariantId,
     result: input.result,
     stepVersion: input.stepVersion || null,
     contentVersion: input.contentVersion || null,
@@ -156,7 +161,7 @@ export async function submitPuzzleResult(input) {
   );
 
   await profiles.updateOne(
-    { playerId, variantId: input.variantId },
+    { playerId, variantId: normalizedVariantId },
     {
       $set: {
         globalRating: playerRatingAfter,
@@ -202,7 +207,7 @@ export async function submitPuzzleResult(input) {
   await db.collection("player_sessions").updateOne(
     { sessionId: input.sessionId, playerId },
     {
-      $set: { sessionId: input.sessionId, playerId, variantId: input.variantId, lastActivityAtUnix: nowUnix },
+      $set: { sessionId: input.sessionId, playerId, variantId: normalizedVariantId, lastActivityAtUnix: nowUnix },
       $setOnInsert: { createdAtUnix: nowUnix },
     },
     { upsert: true }
