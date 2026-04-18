@@ -82,6 +82,8 @@ Pas daarna return:
 }
 ```
 
+- **`playbackPayload`:** zelfde DTO als Studio `GET /api/steps/.../playback` → `item` (zie **`CONTRACT_PLAYBACK_HTTP_V1.md`**: auth `x-owner-type` / `x-owner-id`, query, `payloadVersion: 2`, revision/cache).
+
 ## 2) POST `/v1/puzzles/result`
 
 ### Request
