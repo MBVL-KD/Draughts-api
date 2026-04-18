@@ -67,6 +67,21 @@ GET /api/steps/book/:bookId/lesson/:lessonId/step/:stepId
 
 **Kid Draughts API** bouwt de query als: `bookId`, `lessonId`, `lang` (eerste taal uit genormaliseerde lijst), en **`requiredLanguage` meerdere keren** (één query-param per taal), zie `fetchPlaybackPayload` in `puzzleSelection.service.js`.
 
+### 3.3 Equivalentie §3.1 ↔ §3.2 (normatief)
+
+Studio (`Editor/server/src/routes/playback.ts`) gebruikt voor **beide** routes dezelfde helpers:
+
+- `resolveRequestedLanguage(req)` → `lang` query (default `"en"`).
+- `resolveRequiredLanguages(req)` → `requiredLanguage` als **array** (herhaalde query-keys **of** komma-gescheiden string); default `["en"]`.
+
+**Kid Draughts `fetchPlaybackPayload`** roept alleen **§3.1** aan:
+
+`GET /api/steps/:stepId/playback?bookId=…&lessonId=…&lang=…&requiredLanguage=nl&requiredLanguage=en` (voorbeeld met twee herhaalde params).
+
+**§3.2** zet `bookId`, `lessonId`, `stepId` in het **pad**; de **querystring hoeft alleen** `lang` en `requiredLanguage` (zelfde vorm als hierboven). Geen dubbele `bookId`/`lessonId` in de query nodig.
+
+**Gedrag:** Voor dezelfde owner, dezelfde canonieke `(bookId, lessonId, stepId)` en dezelfde `lang` / `requiredLanguage`-lijst roepen beide routes dezelfde **`buildPlaybackPayload`** aan op dezelfde stap (zodra de stap uniek is opgelost). Het JSON-resultaat **`item`** + **`meta`** (zie §4) is dan functioneel hetzelfde. Randgeval: als `stepId` in §3.1 via `findStepRef` een andere les zou oplossen dan het pad in §3.2, zijn context guards op §3.1 (`bookId`/`lessonId` query) leidend — gebruik consistente refs.
+
 ---
 
 ## 4. Response-envelope (succes)
@@ -87,6 +102,27 @@ HTTP **200**, JSON:
 
 - **`item`:** `PlaybackPayload` na `buildPlaybackPayload`, gevalideerd met Zod `PlaybackPayloadSchema`.
 - Roblox gebruikt **`item`** als enige bron voor bord, validatie en UI (niet `authoringV2` uit Mongo).
+
+### 4.1 `meta` en boek-revision (cache)
+
+| Veld in playback-`meta` | Huidige Studio | Opmerking |
+|-------------------------|----------------|-----------|
+| `bookId`, `lessonId`, `stepId`, `language` | **Ja** | Zoals hierboven. |
+| **`revision`** (of `bookRevision`) | **Nee** | Playback-response bevat **geen** boek-revision in `meta` (zie `playback.ts`: alleen de vier velden). |
+
+**Cache / invalidatie:** gebruik het boek-document, niet playback-`meta`:
+
+| Bron | HTTP | Veldnaam (exact) | Type |
+|------|------|------------------|------|
+| Boek ophalen | `GET /api/books/:bookId` | **`item.revision`** | **number** (Mongo `BookModel`, zie `Editor/server/src/models/BookModel.ts` / `routes/books.ts`) |
+
+Roblox / `LessonContentService:GetPlayback` kan een parameter **`bookRevision`** laten komen uit die bron: **`bookRevision = response.item.revision`** (zelfde getal voor cache-keys).
+
+**Toekomst:** mocht Studio ooit revision in playback `meta` tonen, is de voorkeursnaam **`revision`** (consistent met `item.revision` op books), geen aparte `bookRevision`-sleutel in JSON — clients mappen naar eigen `bookRevision` in code.
+
+**Strikte cache-key (aanbevolen):**  
+`playback:{bookId}:{lessonId}:{stepId}:{lang}:{revision}`  
+waar **`revision`** = `GET /api/books/:bookId` → **`item.revision`**. Ontbreekt of faalt die call: fallback kortere TTL of alleen stap-sleutel (zie §8).
 
 ---
 
@@ -208,23 +244,28 @@ Volgorde uit `authoringV2.authoringLesson.stepIds` of `lesson.steps` in boekvolg
 
 `validateStepForRuntimeExport`: tenzij speciale `askSequence`-cases, faalt incomplete content/taal met o.a.:
 
-- **400** — `ValidationError`: `"Step is not ready for runtime playback export"` met `issues` (pad/code/message).
+- **400** — body: `{ "message": "<string>", "issues": [ … ] }` (Studio `ValidationError`).
+- Message vaak: **`"Step is not ready for runtime playback export"`** — `issues`: array met minimaal `path`, `code`, `message`, `severity` (export-validatie).
 
 **Praktisch:** zet `lang` / `requiredLanguage` consistent (bijv. `en`+`en` voor snelle tests).
 
 ---
 
-## 7. Andere HTTP-fouten
+## 7. HTTP-fouten (Studio — vastgelegde vorm)
 
-| Status | Voorbeeld |
-|--------|-----------|
-| 400 | Validatie, context mismatch, ontbrekende params. |
-| 403 | Geen owner context. |
-| 404 | Step/lesson niet gevonden. |
-| 409 | Conflict (zelden). |
-| 500 | Serverfout. |
+Body is altijd JSON met minimaal **`message`**; bij **400** vaak ook **`issues`**.
 
-**Kid Draughts puzzle-flow:** bij herhaalde playback-fout na alternatieven → client krijgt **`503`** `PLAYBACK_UNAVAILABLE` (zie `CONTRACT_PUZZLES_V1.md`).
+| Status | Wanneer | Voorbeeld `message` | `issues[].code` (indien van toepassing) |
+|--------|---------|----------------------|----------------------------------------|
+| **400** | Context guard §3.1 | `"Step context mismatch"` | **`playback.context.book_mismatch`** (`path`: `bookId`) of **`playback.context.lesson_mismatch`** (`path`: `lessonId`) |
+| **400** | Ontbrekende pad-params §3.2 | `"Missing playback route params"` | **`playback.context.missing`** (`path`: `params`) |
+| **400** | Export niet klaar | `"Step is not ready for runtime playback export"` | Validator-codes in `issues` (geen vaste lijst; altijd `issues` lezen) |
+| **403** | Geen owner | `"Missing owner context"` of `"Invalid owner context"` | — |
+| **404** | — | `"Step not found"`, `"Lesson not found"`, `"Book not found"` | — |
+| **409** | Zeldzaam | — | — |
+| **500** | Server | `"Internal server error"` | — |
+
+**Kid Draughts puzzle-flow:** bij herhaalde playback-fout na alternatieven → client krijgt **`503`** `PLAYBACK_UNAVAILABLE` (zie `CONTRACT_PUZZLES_V1.md`) — **niet** van Studio zelf, maar van de Kid Draughts API.
 
 ---
 
@@ -234,13 +275,14 @@ Roblox leest **geen** Mongo; cache alleen op HTTP-signalen.
 
 | Sleutel | Gebruik |
 |---------|---------|
-| **Stap** | `(bookId, lessonId, stepId, lang)` — invalideer bij wijziging content. |
-| **Boek-revision** | Haal **`revision`** (of equivalent) uit **`GET /api/books`** of een door Studio gedocumenteerd meta-endpoint. Bij gewijzigde revision: cache voor dat boek invalideren of opnieuw valideren. |
+| **Stap** | `(bookId, lessonId, stepId, lang)` — basis. |
+| **Boek-revision** | **`GET /api/books/:bookId`** → **`item.revision`** (number). Bij gewijzigde `revision`: entries voor dat `bookId` invalideren. |
 
 **Aanbevolen cache-key string:**  
-`playback:{bookId}:{lessonId}:{stepId}:{lang}:{bookRevision}`
+`playback:{bookId}:{lessonId}:{stepId}:{lang}:{revision}`  
+met **`revision`** = waarde van **`item.revision`** (books API), niet uit playback-`meta` (daar zit revision **niet** in, zie §4.1).
 
-Als `bookRevision` ontbreekt in de response, gebruik alleen de stap-sleutel en kortere TTL (bijv. 5–15 min) of ETag als Studio die ooit toevoegt.
+Als `item.revision` niet beschikbaar is: alleen stap-sleutel + kortere TTL (bijv. 5–15 min).
 
 ---
 
@@ -280,3 +322,5 @@ Zie gebruikerspecificatie §10; response heeft altijd **`item`** + **`meta`**.
 - Implementatie Kid Draughts → Studio: `src/services/puzzleSelection.service.js` (`fetchPlaybackPayload`).
 
 **Versie:** `contractVersion: playback-http-v1` (documentversie; niet verwarren met `payloadVersion` in JSON).
+
+**Changelog:** playback-http-v1.1 — §3.3 equivalentie Kid Draughts vs §3.2; §4.1 `meta` vs `item.revision`; §7 foutcodes gelijk aan Studio `playback.ts` / `httpErrors`.
