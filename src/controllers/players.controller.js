@@ -1,4 +1,5 @@
 import { getDb } from "../config/mongo.js";
+import { buildPuzzleStatsResponse } from "../services/puzzleStats.service.js";
 
 /* =========================================================
    Helpers
@@ -779,11 +780,41 @@ export async function getProfileSnapshot(req, res) {
     },
   };
 
+  let puzzleStats = null;
+  try {
+    puzzleStats = await buildPuzzleStatsResponse(userId);
+  } catch (err) {
+    console.error("getProfileSnapshot puzzleStats:", err);
+  }
+
   return res.json({
     ok: true,
     profile: mergedProfile,
     ratings,
     recentMatches,
     recentTournaments,
+    ...(puzzleStats ? { puzzleStats } : {}),
   });
+}
+
+export async function getPuzzleStats(req, res) {
+  const userId = Number(req.params.userId);
+
+  if (!isValidUserId(userId)) {
+    return res.status(400).json({
+      ok: false,
+      error: "BAD_USER_ID",
+    });
+  }
+
+  try {
+    const body = await buildPuzzleStatsResponse(userId);
+    return res.json(body);
+  } catch (err) {
+    console.error("getPuzzleStats error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR",
+    });
+  }
 }

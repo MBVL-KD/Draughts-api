@@ -165,3 +165,101 @@ Client stuurt geen `progressScore` voor ratingbesluit (optioneel alleen telemetr
   "message": "Playback could not be generated after 3 candidates."
 }
 ```
+
+## 3) Puzzle-statistieken (read-model, Roblox server)
+
+Server-to-server: header `x-api-key: <API_KEY>` (zelfde als `/v1/puzzles/*`).
+
+### GET `/api/players/:userId/puzzle-stats`
+
+- **200** — body (minimaal):
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "userId": 123456789,
+  "rating": {
+    "value": 820,
+    "deviation": 200,
+    "scope": "global"
+  },
+  "totals": { "solved": 42, "attempted": 50, "hintsUsed": 12 },
+  "streaks": { "current": 3, "best": 10 },
+  "lastActivityAt": 1710000000,
+  "byVariant": {
+    "international": {
+      "solved": 40,
+      "attempted": 48,
+      "rating": 815,
+      "provisional": true
+    }
+  }
+}
+```
+
+- **Lege speler** (geen attempts/profielen): `solved`/`attempted`/`hintsUsed` = 0, `rating.value` = **800** (default), `streaks` = `{ "current": 0, "best": 0 }`, `lastActivityAt` = `null`, `byVariant` = `{}`.
+
+- **Fouten**
+
+| HTTP | `error`              |
+|------|----------------------|
+| 400  | `BAD_USER_ID`      |
+| 401  | `UNAUTHORIZED`     |
+| 500  | `INTERNAL_ERROR`   |
+| 500  | `API_KEY_NOT_CONFIGURED` (server) |
+
+### Streak-definitie
+
+Attempts gesorteerd op `playedAtUnix` (oplopend). `solved === true` telt mee in de run; elke niet-opgeloste poging zet de run op 0. **current** = aaneengesloten successen eindigend bij de laatste poging; **best** = langste run ooit.
+
+### Rating (samenvatting)
+
+Zelfde kern als `POST /v1/puzzles/result`: verwachte score vs puzzelrating, `actualScore` uit tijd/hints/fouten; updates per variant in `player_puzzle_profiles`. **Globale** `rating.value` = gewogen gemiddelde over varianten (gewicht = aantal attempts per variant). `deviation` is een **heuristiek** (geen echte Glicko-RD): hoog (~200) bij weinig data / provisional, lager (~75) na voldoende attempts.
+
+### Idempotentie
+
+Zelfde `attemptId` dubbel tellen wordt voorkomen door unieke index op `puzzle_attempts.attemptId` (bestaand gedrag).
+
+### Profielintegratie (option A)
+
+`GET /api/players/:userId/profile-snapshot` bevat optioneel hetzelfde object onder **`puzzleStats`** (één HTTP-call). Bij fout tijdens ophalen ontbreekt het veld.
+
+### Caching
+
+Roblox-server mag 30–60 s per user cachen; API hoeft geen extra cache-header te zetten.
+
+### OpenAPI-fragment
+
+```yaml
+paths:
+  /api/players/{userId}/puzzle-stats:
+    get:
+      summary: Puzzle statistics for Roblox profile UI
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: integer }
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Stats payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schemaVersion, ok, userId]
+                properties:
+                  schemaVersion: { type: integer, example: 1 }
+                  ok: { type: boolean }
+                  userId: { type: integer }
+        '401': { description: Missing or invalid x-api-key }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+```
