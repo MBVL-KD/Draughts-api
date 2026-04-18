@@ -1,4 +1,8 @@
 import { getDb } from "../config/mongo.js";
+import {
+  buildEducationPublicFields,
+  EDUCATION_PUBLIC_SCHEMA_VERSION,
+} from "../services/educationPublic.service.js";
 import { buildPuzzleStatsResponse } from "../services/puzzleStats.service.js";
 
 /* =========================================================
@@ -787,12 +791,18 @@ export async function getProfileSnapshot(req, res) {
     console.error("getProfileSnapshot puzzleStats:", err);
   }
 
+  const educationPublic = {
+    schemaVersion: EDUCATION_PUBLIC_SCHEMA_VERSION,
+    ...buildEducationPublicFields(mergedProfile, userId),
+  };
+
   return res.json({
     ok: true,
     profile: mergedProfile,
     ratings,
     recentMatches,
     recentTournaments,
+    educationPublic,
     ...(puzzleStats ? { puzzleStats } : {}),
   });
 }

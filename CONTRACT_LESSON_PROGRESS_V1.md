@@ -142,3 +142,9 @@ Collectie **`player_lesson_progress`**.
 **schemaVersion:** `1` op records; lijst-response bevat ook `schemaVersion`.
 
 **Changelog:** v1.2 — GET lijst zonder book/lesson; `LESSON_PROGRESS_QUERY_PAIR`; index lijst; §4–§5.
+
+---
+
+## Publieke opleiding (geen les-lijst)
+
+`GET /api/players/:userId/lesson-progress/public` + **`educationPublic`** in `profile-snapshot` — zie **`CONTRACT_EDUCATION_PUBLIC_V1.md`**.
