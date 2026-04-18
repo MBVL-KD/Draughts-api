@@ -95,7 +95,9 @@ HTTP **200**, JSON:
     "bookId": "<string>",
     "lessonId": "<string>",
     "stepId": "<string>",
-    "language": "<string>"
+    "language": "<string>",
+    "revision": 42,
+    "bookRevision": 42
   }
 }
 ```
@@ -105,24 +107,19 @@ HTTP **200**, JSON:
 
 ### 4.1 `meta` en boek-revision (cache)
 
-| Veld in playback-`meta` | Huidige Studio | Opmerking |
-|-------------------------|----------------|-----------|
+| Veld in playback-`meta` | Studio (huidig) | Opmerking |
+|-------------------------|-----------------|-----------|
 | `bookId`, `lessonId`, `stepId`, `language` | **Ja** | Zoals hierboven. |
-| **`revision`** (of `bookRevision`) | **Nee** | Playback-response bevat **geen** boek-revision in `meta` (zie `playback.ts`: alleen de vier velden). |
+| **`revision`** | **Ja** (als bekend) | Zelfde numerieke bron als **`GET /api/books/:bookId` → `item.revision`** (`BookModel`). |
+| **`bookRevision`** | **Ja** (als bekend) | **Alias** van `revision` (zelfde getal); handig voor `LessonContentService:GetPlayback({ bookRevision })`. |
 
-**Cache / invalidatie:** gebruik het boek-document, niet playback-`meta`:
+Als het boekdocument geen geldig `revision`-veld heeft (zeldzaam / legacy), ontbreken **`revision`** en **`bookRevision`** in `meta`.
 
-| Bron | HTTP | Veldnaam (exact) | Type |
-|------|------|------------------|------|
-| Boek ophalen | `GET /api/books/:bookId` | **`item.revision`** | **number** (Mongo `BookModel`, zie `Editor/server/src/models/BookModel.ts` / `routes/books.ts`) |
-
-Roblox / `LessonContentService:GetPlayback` kan een parameter **`bookRevision`** laten komen uit die bron: **`bookRevision = response.item.revision`** (zelfde getal voor cache-keys).
-
-**Toekomst:** mocht Studio ooit revision in playback `meta` tonen, is de voorkeursnaam **`revision`** (consistent met `item.revision` op books), geen aparte `bookRevision`-sleutel in JSON — clients mappen naar eigen `bookRevision` in code.
+**Fallback cache / invalidatie:** zonder playback-`meta.revision` kun je nog steeds **`GET /api/books/:bookId` → `item.revision`** aanroepen.
 
 **Strikte cache-key (aanbevolen):**  
 `playback:{bookId}:{lessonId}:{stepId}:{lang}:{revision}`  
-waar **`revision`** = `GET /api/books/:bookId` → **`item.revision`**. Ontbreekt of faalt die call: fallback kortere TTL of alleen stap-sleutel (zie §8).
+waar **`revision`** voorkeursgewijs uit **`meta.revision`** (of **`meta.bookRevision`**) komt; anders uit **`item.revision`** van de books-route (zie §8).
 
 ---
 
@@ -276,13 +273,14 @@ Roblox leest **geen** Mongo; cache alleen op HTTP-signalen.
 | Sleutel | Gebruik |
 |---------|---------|
 | **Stap** | `(bookId, lessonId, stepId, lang)` — basis. |
-| **Boek-revision** | **`GET /api/books/:bookId`** → **`item.revision`** (number). Bij gewijzigde `revision`: entries voor dat `bookId` invalideren. |
+| **Boek-revision (primair)** | Playback **`meta.revision`** of **`meta.bookRevision`** (zelfde **number** als `GET /api/books/:bookId` → **`item.revision`**). Bij gewijzigde revision: cache voor die stap invalideren. |
+| **Boek-revision (fallback)** | **`GET /api/books/:bookId`** → **`item.revision`** als `meta` geen revision bevat. |
 
 **Aanbevolen cache-key string:**  
 `playback:{bookId}:{lessonId}:{stepId}:{lang}:{revision}`  
-met **`revision`** = waarde van **`item.revision`** (books API), niet uit playback-`meta` (daar zit revision **niet** in, zie §4.1).
+met **`revision`** = **`meta.revision`** (of **`meta.bookRevision`**), anders **`item.revision`** van books.
 
-Als `item.revision` niet beschikbaar is: alleen stap-sleutel + kortere TTL (bijv. 5–15 min).
+Ontbreken beide: alleen stap-sleutel + kortere TTL (bijv. 5–15 min).
 
 ---
 
@@ -323,4 +321,6 @@ Zie gebruikerspecificatie §10; response heeft altijd **`item`** + **`meta`**.
 
 **Versie:** `contractVersion: playback-http-v1` (documentversie; niet verwarren met `payloadVersion` in JSON).
 
-**Changelog:** playback-http-v1.1 — §3.3 equivalentie Kid Draughts vs §3.2; §4.1 `meta` vs `item.revision`; §7 foutcodes gelijk aan Studio `playback.ts` / `httpErrors`.
+**Changelog:**  
+- playback-http-v1.2 — `meta.revision` + `meta.bookRevision` (Studio playback); §4 / §4.1 / §8 bijgewerkt.  
+- playback-http-v1.1 — §3.3 equivalentie Kid Draughts vs §3.2; §4.1 vs `item.revision`; §7 foutcodes gelijk aan Studio `playback.ts` / `httpErrors`.
