@@ -47,7 +47,8 @@ export async function patchLessonProgress(req, res) {
   if (b.error) return res.status(400).json(b.error.body);
   const l = trimString(body.lessonId, "LESSON_ID");
   if (l.error) return res.status(400).json(l.error.body);
-  const s = trimString(body.stepId, "STEP_ID");
+  const stepIdRaw = body.stepId ?? body.completedStepId;
+  const s = trimString(stepIdRaw, "STEP_ID");
   if (s.error) return res.status(400).json(s.error.body);
 
   if (!Number.isFinite(Number(body.stepIndex)) || Number(body.stepIndex) < 0) {
@@ -62,8 +63,10 @@ export async function patchLessonProgress(req, res) {
       stepId: s.value,
       stepIndex: body.stepIndex,
       totalSteps: body.totalSteps,
+      totalStepsKnown: body.totalStepsKnown,
       bookRevision: body.bookRevision,
       source: body.source,
+      markStepCompleted: body.markStepCompleted,
     });
     if (result.error) {
       return res.status(result.error.status).json(result.error.body);

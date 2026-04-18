@@ -52,11 +52,15 @@ Zelfde handler. Body JSON:
 |------|-----------|------|------------|
 | `bookId` | ja | string | |
 | `lessonId` | ja | string | |
-| `stepId` | ja | string | Wordt idempotent toegevoegd aan `completedStepIds`. |
+| `stepId` | ja* | string | *Of alias **`completedStepId`** (zelfde betekenis). Standaard: idempotent toegevoegd aan `completedStepIds`. |
 | `stepIndex` | ja | number ≥ 0 | `furthestStepIndex` = max(bestaand, `stepIndex`). |
-| `totalSteps` | nee | number ≥ 0 | `totalStepsKnown` = max(bestaand, `totalSteps`) indien gezet. |
+| `totalSteps` | nee | number ≥ 0 | `totalStepsKnown` = max(bestaand, waarde) indien gezet. |
+| `totalStepsKnown` | nee | number ≥ 0 | **Alias** van `totalSteps` (Roblox kan dit veld rechtstreeks sturen). |
+| `markStepCompleted` | nee | boolean | Default **`true`**. Zet **`false`** om alleen furthest/total/revision bij te werken **zonder** `stepId` aan `completedStepIds` toe te voegen. |
 | `bookRevision` | nee | number | Zie **409** hieronder. |
 | `source` | nee | string | Default `"roblox"`. |
+
+**Roblox `LearningProgressService`:** GET mapt `lastPlayedAt` (API) ↔ `lastPlayedAtUnix` (lokaal); `totalStepsKnown` in response is al de canonieke naam. PATCH: stuur `totalStepsKnown` óf `totalSteps`; stuur `stepId` óf `completedStepId`; 409 = geen server-write (jullie DataStore-skip klopt).
 
 ### 200
 

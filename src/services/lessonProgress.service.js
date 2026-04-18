@@ -51,15 +51,7 @@ export function mapDocToGetResponse(doc, bookId, lessonId) {
 
 /**
  * @param {object} input
- * @param {string} input.playerId
- * @param {string} input.bookId
- * @param {string} input.lessonId
- * @param {string} input.stepId
- * @param {number} input.stepIndex
- * @param {number|null|undefined} input.totalSteps
- * @param {number|null|undefined} input.bookRevision
- * @param {string|undefined} input.source
- * @returns {Promise<{ ok: true, ... } | { error: { status: number, body: object } }>}
+ * @param {boolean|undefined} input.markStepCompleted default true — if false, no append to completedStepIds
  */
 export async function upsertLessonProgress(input) {
   const db = getDb();
@@ -98,12 +90,16 @@ export async function upsertLessonProgress(input) {
     furthestStepId = stepId;
   }
 
+  const markStepCompleted = input.markStepCompleted !== false;
   const completed = new Set(Array.isArray(existing?.completedStepIds) ? existing.completedStepIds : []);
-  completed.add(stepId);
+  if (markStepCompleted) {
+    completed.add(stepId);
+  }
 
   let totalStepsKnown = existing?.totalStepsKnown ?? null;
-  if (input.totalSteps != null) {
-    const ts = toFiniteInt(input.totalSteps);
+  const totalStepsInput = input.totalSteps != null ? input.totalSteps : input.totalStepsKnown;
+  if (totalStepsInput != null) {
+    const ts = toFiniteInt(totalStepsInput);
     if (ts !== null && ts >= 0) {
       totalStepsKnown =
         totalStepsKnown === null ? ts : Math.max(totalStepsKnown, ts);
