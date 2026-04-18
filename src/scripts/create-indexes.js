@@ -20,6 +20,7 @@ await db.collection("player_sessions").createIndex({ sessionId: 1 }, { unique: t
 await db.collection("puzzle_catalog").createIndex({ active: 1, "meta.variantId": 1, "rating.value": 1 });
 await db.collection("puzzle_catalog").createIndex({ bookId: 1, lessonId: 1, "meta.variantId": 1, active: 1 });
 await db.collection("player_lesson_progress").createIndex({ playerId: 1, bookId: 1, lessonId: 1 }, { unique: true });
+await db.collection("player_lesson_progress").createIndex({ playerId: 1, lastPlayedAtUnix: -1 });
 
 console.log("Indexes created");
 process.exit(0);

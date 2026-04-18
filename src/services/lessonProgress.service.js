@@ -20,6 +20,21 @@ export async function findLessonProgressDoc(playerId, bookId, lessonId) {
   return db.collection(COLLECTION).findOne({ playerId, bookId, lessonId });
 }
 
+export function mapDocToListItem(doc) {
+  const ids = Array.isArray(doc.completedStepIds) ? doc.completedStepIds : [];
+  return {
+    bookId: doc.bookId,
+    lessonId: doc.lessonId,
+    furthestStepIndex: doc.furthestStepIndex ?? null,
+    furthestStepId: doc.furthestStepId ?? null,
+    totalStepsKnown: doc.totalStepsKnown ?? null,
+    bookRevision: doc.bookRevision ?? null,
+    completedStepIds: [...ids],
+    completedCount: ids.length,
+    lastPlayedAt: doc.lastPlayedAtUnix ?? null,
+  };
+}
+
 export function mapDocToGetResponse(doc, bookId, lessonId) {
   if (!doc) {
     return {
@@ -49,10 +64,6 @@ export function mapDocToGetResponse(doc, bookId, lessonId) {
   };
 }
 
-/**
- * @param {object} input
- * @param {boolean|undefined} input.markStepCompleted default true — if false, no append to completedStepIds
- */
 export async function upsertLessonProgress(input) {
   const db = getDb();
   const coll = db.collection(COLLECTION);
@@ -140,4 +151,34 @@ export async function upsertLessonProgress(input) {
 
   const saved = await coll.findOne({ playerId, bookId, lessonId });
   return mapDocToGetResponse(saved, bookId, lessonId);
+}
+
+export async function listLessonProgressForPlayer(playerId, opts) {
+  const db = getDb();
+  const coll = db.collection(COLLECTION);
+  const limit = opts.limit;
+  const offset = opts.offset;
+  const filter = { playerId: normalizePlayerId(playerId) };
+
+  const [total, docs] = await Promise.all([
+    coll.countDocuments(filter),
+    coll
+      .find(filter)
+      .sort({ lastPlayedAtUnix: -1, bookId: 1, lessonId: 1 })
+      .skip(offset)
+      .limit(limit)
+      .toArray(),
+  ]);
+
+  return {
+    ok: true,
+    mode: "list",
+    schemaVersion: LESSON_PROGRESS_SCHEMA_VERSION,
+    items: docs.map(mapDocToListItem),
+    pagination: {
+      limit,
+      offset,
+      total,
+    },
+  };
 }
