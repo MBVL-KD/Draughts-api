@@ -79,3 +79,54 @@ Auth: `x-api-key` (server-to-server).
 ## Standaard filtering
 - `GET /api/players/:userId/books` => **zonder** puzzleboek(en)
 - `GET /api/players/:userId/books?includePuzzles=true` => inclusief puzzleboek(en)
+
+## GET `/api/players/:userId/books/:bookId/lessons`
+
+Boekdetail per speler (zwaardere call; pas na boekselectie).
+
+### Query
+- `lang` (optioneel, default `nl`)
+
+### 200
+```json
+{
+  "ok": true,
+  "schemaVersion": 1,
+  "userId": 123,
+  "bookId": "book_5",
+  "titleText": "Niveau 5",
+  "eligible": false,
+  "lockReasons": ["LOCKED_PURCHASE_REQUIRED", "LOCKED_PREREQ_EXAMS"],
+  "unlockProgress": {
+    "requiredBookId": "book_4",
+    "requiredExamLessonIds": ["exam_4a", "exam_4b"],
+    "passedExamLessonIds": ["exam_4a"],
+    "requiredExamCount": 2,
+    "passedExamCount": 1,
+    "requiredPassMode": "all"
+  },
+  "lessons": [
+    {
+      "lessonId": "lesson_1",
+      "titleText": "Examen Niveau 5A",
+      "isExam": true,
+      "progress": { "completedSteps": 0, "totalSteps": 10, "percent": 0 },
+      "status": "locked",
+      "attempt": { "attempted": false, "passed": false, "canRetake": false },
+      "actions": { "canProceed": false, "canRestart": false, "disabledReason": "BOOK_LOCKED" }
+    }
+  ]
+}
+```
+
+### `status`
+- `not_started`
+- `in_progress`
+- `completed`
+- `locked`
+
+### Fouten
+- `400` `BAD_USER_ID`, `BAD_BOOK_ID`
+- `401` `UNAUTHORIZED`
+- `404` `BOOK_NOT_FOUND`
+- `500` `INTERNAL_ERROR`

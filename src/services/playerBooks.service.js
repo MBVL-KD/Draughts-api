@@ -166,3 +166,90 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
     items: sortBooks(items),
   };
 }
+
+function progressFromDoc(doc) {
+  const completedSteps = safeArray(doc?.completedStepIds).length;
+  const totalFromDoc = Number(doc?.totalStepsKnown);
+  const totalSteps = Number.isFinite(totalFromDoc) && totalFromDoc >= 0 ? Math.trunc(totalFromDoc) : completedSteps;
+  const percent = totalSteps > 0 ? Math.round((Math.min(completedSteps, totalSteps) / totalSteps) * 100) : 0;
+  return { completedSteps, totalSteps, percent };
+}
+
+function lessonStatus(bookEligible, progress) {
+  if (!bookEligible) return "locked";
+  if (progress.totalSteps > 0 && progress.completedSteps >= progress.totalSteps) return "completed";
+  if (progress.completedSteps > 0) return "in_progress";
+  return "not_started";
+}
+
+export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
+  const db = getDb();
+  const lang = typeof opts.lang === "string" && opts.lang.trim() ? opts.lang.trim() : "nl";
+  const playerId = String(userId);
+
+  const [catalog, bookDoc, lessonProgressRows] = await Promise.all([
+    buildPlayerBooksResponse(userId, { lang, includePuzzles: true }),
+    db.collection("books").findOne({ isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] }),
+    db.collection("player_lesson_progress").find({ playerId, bookId }).toArray(),
+  ]);
+
+  const bookListRow = safeArray(catalog.items).find((row) => row.bookId === bookId);
+  if (!bookDoc || !bookListRow) {
+    return { error: { status: 404, body: { ok: false, error: "BOOK_NOT_FOUND" } } };
+  }
+
+  const progressByLessonId = new Map();
+  for (const row of lessonProgressRows) {
+    if (typeof row?.lessonId === "string" && row.lessonId.trim()) {
+      progressByLessonId.set(row.lessonId, row);
+    }
+  }
+
+  const lessons = safeArray(bookDoc.lessons).map((lesson) => {
+    const lessonId =
+      typeof lesson?.lessonId === "string" ? lesson.lessonId : typeof lesson?.id === "string" ? lesson.id : null;
+    const isExam = lesson?.isExam === true;
+    const progressDoc = lessonId ? progressByLessonId.get(lessonId) : null;
+    const progress = progressFromDoc(progressDoc);
+    const status = lessonStatus(bookListRow.eligible, progress);
+    const attempted = progressDoc != null;
+    const passed = status === "completed";
+    const canRetake = isExam ? false : true;
+    const examBlocked = isExam && attempted && !canRetake;
+    const canProceed = !examBlocked && (status === "in_progress" || status === "completed");
+    const canRestart = !examBlocked && status !== "not_started";
+    const disabledReason = status === "locked" ? "BOOK_LOCKED" : examBlocked ? "EXAM_ALREADY_ATTEMPTED" : null;
+
+    return {
+      lessonId,
+      title: lesson?.title || null,
+      titleText: textForLang(lesson?.title, lang),
+      isExam,
+      progress,
+      status,
+      attempt: {
+        attempted,
+        passed,
+        canRetake,
+      },
+      actions: {
+        canProceed,
+        canRestart,
+        disabledReason,
+      },
+    };
+  });
+
+  return {
+    ok: true,
+    schemaVersion: PLAYER_BOOKS_SCHEMA_VERSION,
+    userId,
+    bookId,
+    title: bookListRow.title,
+    titleText: bookListRow.titleText,
+    eligible: bookListRow.eligible,
+    lockReasons: bookListRow.lockReasons,
+    unlockProgress: bookListRow.unlockProgress,
+    lessons,
+  };
+}
