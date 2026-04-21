@@ -25,6 +25,16 @@ const flatResultFieldsSchema = z.object({
   mistakes: z.number().int().min(0).max(100),
 });
 
+const lessonProgressSchema = z.object({
+  bookId: z.string().min(1),
+  lessonId: z.string().min(1),
+  stepId: z.string().min(1),
+  stepIndex: z.number().int().min(0),
+  totalStepsKnown: z.number().int().min(0).optional(),
+  bookRevision: z.number().int().min(0).optional(),
+  markStepCompleted: z.boolean().optional(),
+});
+
 export const puzzleResultCompatSchema = z
   .object({
     attemptId: z.string().min(1).max(120),
@@ -42,6 +52,7 @@ export const puzzleResultCompatSchema = z
     stepVersion: z.string().max(120).optional(),
     contentVersion: z.string().max(120).optional(),
     finalFen: z.string().max(200).optional(),
+    lessonProgress: lessonProgressSchema.optional(),
     debug: z.boolean().optional().default(false),
   })
   .superRefine((value, ctx) => {
@@ -79,5 +90,6 @@ export const puzzleResultCompatSchema = z
     stepVersion: value.stepVersion,
     contentVersion: value.contentVersion,
     finalFen: value.finalFen,
+    lessonProgress: value.lessonProgress,
     debug: value.debug ?? false,
   }));

@@ -12,6 +12,22 @@ function toFiniteInt(value) {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
+function encodeCursor(lastPlayedAtUnix) {
+  const token = `${lastPlayedAtUnix || 0}`;
+  return Buffer.from(token, "utf8").toString("base64");
+}
+
+function decodeCursor(cursor) {
+  try {
+    const raw = Buffer.from(String(cursor), "base64").toString("utf8");
+    const ts = toFiniteInt(raw);
+    if (ts === null) return null;
+    return { lastPlayedAtUnix: ts };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @returns {Promise<object|null>}
  */
@@ -79,6 +95,13 @@ export async function upsertLessonProgress(input) {
   const storedRev = existing?.bookRevision != null ? toFiniteInt(existing.bookRevision) : null;
 
   if (clientRev !== null && storedRev !== null && clientRev < storedRev) {
+    console.warn("[lesson-progress] revision_mismatch", {
+      playerId,
+      bookId,
+      lessonId,
+      expectedRevision: storedRev,
+      actualRevision: clientRev,
+    });
     return {
       error: {
         status: 409,
@@ -87,6 +110,19 @@ export async function upsertLessonProgress(input) {
           error: "BOOK_REVISION_MISMATCH",
           expectedRevision: storedRev,
           actualRevision: clientRev,
+        },
+      },
+    };
+  }
+
+  if (input.isExam === true && input.canRetake === false && existing) {
+    return {
+      error: {
+        status: 409,
+        body: {
+          ok: false,
+          error: "EXAM_ALREADY_ATTEMPTED",
+          message: "Exam already attempted and retake is disabled",
         },
       },
     };
@@ -150,6 +186,14 @@ export async function upsertLessonProgress(input) {
   );
 
   const saved = await coll.findOne({ playerId, bookId, lessonId });
+  console.log("[lesson-progress] write", {
+    userId: playerId,
+    bookId,
+    lessonId,
+    stepId,
+    stepIndex,
+    revision: nextBookRev,
+  });
   return mapDocToGetResponse(saved, bookId, lessonId);
 }
 
@@ -157,18 +201,42 @@ export async function listLessonProgressForPlayer(playerId, opts) {
   const db = getDb();
   const coll = db.collection(COLLECTION);
   const limit = opts.limit;
-  const offset = opts.offset;
+  const offset = opts.offset ?? 0;
+  const cursor = opts.cursor;
   const filter = { playerId: normalizePlayerId(playerId) };
+  const cursorDecoded = cursor ? decodeCursor(cursor) : null;
+
+  if (cursor && !cursorDecoded) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          ok: false,
+          error: "BAD_CURSOR",
+          issues: [{ path: "cursor", code: "cursor.invalid", message: "Invalid cursor token" }],
+        },
+      },
+    };
+  }
+
+  const cursorFilter = cursorDecoded
+    ? {
+        lastPlayedAtUnix: { $lt: cursorDecoded.lastPlayedAtUnix },
+      }
+    : {};
 
   const [total, docs] = await Promise.all([
     coll.countDocuments(filter),
     coll
-      .find(filter)
+      .find({ ...filter, ...cursorFilter })
       .sort({ lastPlayedAtUnix: -1, bookId: 1, lessonId: 1 })
       .skip(offset)
       .limit(limit)
       .toArray(),
   ]);
+
+  const last = docs[docs.length - 1];
+  const nextCursor = docs.length === limit && last ? encodeCursor(last.lastPlayedAtUnix || 0) : null;
 
   return {
     ok: true,
@@ -179,6 +247,7 @@ export async function listLessonProgressForPlayer(playerId, opts) {
       limit,
       offset,
       total,
+      nextCursor,
     },
   };
 }
