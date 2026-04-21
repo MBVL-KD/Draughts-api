@@ -11,8 +11,9 @@ export async function getPlayerBooks(req, res) {
   }
 
   const lang = typeof req.query.lang === "string" ? req.query.lang : undefined;
+  const includePuzzles = String(req.query.includePuzzles || "false").toLowerCase() === "true";
   try {
-    const body = await buildPlayerBooksResponse(userId, { lang });
+    const body = await buildPlayerBooksResponse(userId, { lang, includePuzzles });
     return res.json(body);
   } catch (err) {
     console.error("getPlayerBooks:", err);

@@ -8,6 +8,8 @@ Auth: `x-api-key` (server-to-server).
 
 ### Query
 - `lang` (optioneel, default `nl`) voor `titleText`.
+- `includePuzzles` (optioneel, default `false`).  
+  Standaard worden puzzle-importboeken (titel `Puzzels` / `Puzzles`) **uitgesloten** uit deze lijst.
 
 ### 200
 ```json
@@ -73,3 +75,7 @@ Auth: `x-api-key` (server-to-server).
     - `any`: minimaal 1 vereist examen
 
 `eligible = entitlementOk && examGateOk`
+
+## Standaard filtering
+- `GET /api/players/:userId/books` => **zonder** puzzleboek(en)
+- `GET /api/players/:userId/books?includePuzzles=true` => inclusief puzzleboek(en)

@@ -62,9 +62,18 @@ function sortBooks(items) {
   });
 }
 
+function isPuzzleBook(book) {
+  const values = book?.title?.values;
+  if (!values || typeof values !== "object") return false;
+  const nl = typeof values.nl === "string" ? values.nl.trim().toLowerCase() : "";
+  const en = typeof values.en === "string" ? values.en.trim().toLowerCase() : "";
+  return nl === "puzzels" || en === "puzzles" || en === "puzzels";
+}
+
 export async function buildPlayerBooksResponse(userId, opts = {}) {
   const db = getDb();
   const lang = typeof opts.lang === "string" && opts.lang.trim() ? opts.lang.trim() : "nl";
+  const includePuzzles = opts.includePuzzles === true;
 
   const [profile, booksRaw] = await Promise.all([
     db.collection("player_profiles").findOne({ userId }),
@@ -84,6 +93,9 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
 
   const items = [];
   for (const book of booksRaw) {
+    if (!includePuzzles && isPuzzleBook(book)) {
+      continue;
+    }
     const bookId = typeof book?.bookId === "string" ? book.bookId : typeof book?.id === "string" ? book.id : null;
     if (!bookId) continue;
 
