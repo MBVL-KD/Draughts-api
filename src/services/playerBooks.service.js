@@ -167,10 +167,32 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
   };
 }
 
-function progressFromDoc(doc) {
+function lessonTotalStepsFromBook(lesson) {
+  const authoring = lesson?.authoringV2?.authoringLesson;
+  const ids = safeArray(authoring?.stepIds).filter((id) => typeof id === "string" && id.trim());
+  if (ids.length) return ids.length;
+  return safeArray(lesson?.steps).length;
+}
+
+function entryStepIdFromBook(lesson) {
+  const authoring = lesson?.authoringV2?.authoringLesson;
+  const explicit = authoring?.entryStepId;
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+  const ids = safeArray(authoring?.stepIds).filter((id) => typeof id === "string" && id.trim());
+  if (ids.length) return ids[0];
+  const steps = safeArray(lesson?.steps);
+  const first = steps[0];
+  const sid = first?.stepId || first?.id;
+  return typeof sid === "string" && sid.trim() ? sid.trim() : null;
+}
+
+function progressFromDoc(doc, lesson) {
   const completedSteps = safeArray(doc?.completedStepIds).length;
   const totalFromDoc = Number(doc?.totalStepsKnown);
-  const totalSteps = Number.isFinite(totalFromDoc) && totalFromDoc >= 0 ? Math.trunc(totalFromDoc) : completedSteps;
+  const docTotal =
+    Number.isFinite(totalFromDoc) && totalFromDoc >= 0 ? Math.trunc(totalFromDoc) : Number.NaN;
+  const fromBook = lesson ? lessonTotalStepsFromBook(lesson) : 0;
+  const totalSteps = Math.max(fromBook, Number.isFinite(docTotal) ? docTotal : 0, completedSteps);
   const percent = totalSteps > 0 ? Math.round((Math.min(completedSteps, totalSteps) / totalSteps) * 100) : 0;
   return { completedSteps, totalSteps, percent };
 }
@@ -210,21 +232,34 @@ export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
       typeof lesson?.lessonId === "string" ? lesson.lessonId : typeof lesson?.id === "string" ? lesson.id : null;
     const isExam = lesson?.isExam === true;
     const progressDoc = lessonId ? progressByLessonId.get(lessonId) : null;
-    const progress = progressFromDoc(progressDoc);
+    const entryStepId = entryStepIdFromBook(lesson);
+    const furthestStepId =
+      typeof progressDoc?.furthestStepId === "string" && progressDoc.furthestStepId.trim()
+        ? progressDoc.furthestStepId.trim()
+        : null;
+    const resumeStepId = furthestStepId || entryStepId;
+    const progress = progressFromDoc(progressDoc, lesson);
     const status = lessonStatus(bookListRow.eligible, progress);
     const attempted = progressDoc != null;
     const passed = status === "completed";
     const canRetake = isExam ? false : true;
-    const examBlocked = isExam && attempted && !canRetake;
-    const canProceed = !examBlocked && (status === "in_progress" || status === "completed");
-    const canRestart = !examBlocked && status !== "not_started";
-    const disabledReason = status === "locked" ? "BOOK_LOCKED" : examBlocked ? "EXAM_ALREADY_ATTEMPTED" : null;
+    const examBlocked = isExam && !canRetake && status === "completed";
+    const canProceed =
+      bookListRow.eligible &&
+      status !== "locked" &&
+      !examBlocked &&
+      (status === "not_started" || status === "in_progress" || status === "completed");
+    const canRestart = bookListRow.eligible && status !== "locked" && !examBlocked && status !== "not_started";
+    const disabledReason =
+      status === "locked" ? "BOOK_LOCKED" : examBlocked ? "EXAM_ALREADY_ATTEMPTED" : null;
 
     return {
       lessonId,
       title: lesson?.title || null,
       titleText: textForLang(lesson?.title, lang),
       isExam,
+      entryStepId,
+      resumeStepId,
       progress,
       status,
       attempt: {
