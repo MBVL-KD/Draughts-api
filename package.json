@@ -8,7 +8,10 @@
     "start": "node src/server.js",
     "migrate:content": "node src/scripts/migrate-content-to-kid-draughts.js",
     "backfill:variant-id": "node src/scripts/backfill-puzzle-variant-id.js",
-    "sync:test-to-kid": "MIGRATION_SOURCE_DB=test MIGRATION_TARGET_DB=kid_draughts node src/scripts/migrate-content-to-kid-draughts.js"
+    "sync:test-to-kid": "MIGRATION_SOURCE_DB=test MIGRATION_TARGET_DB=kid_draughts node src/scripts/migrate-content-to-kid-draughts.js",
+    "sync:books": "node src/scripts/sync-books-test-to-kid.js",
+    "sync:books:test-to-kid": "MIGRATION_SOURCE_DB=test MIGRATION_TARGET_DB=kid_draughts node src/scripts/sync-books-test-to-kid.js",
+    "sync:books:test-to-kid:dry": "MIGRATION_SOURCE_DB=test MIGRATION_TARGET_DB=kid_draughts DRY_RUN=true node src/scripts/sync-books-test-to-kid.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -18,4 +21,3 @@
     "zod": "^3.23.8"
   }
 }
-
