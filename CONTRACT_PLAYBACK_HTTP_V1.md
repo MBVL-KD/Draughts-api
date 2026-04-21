@@ -17,6 +17,16 @@
 
 Voorbeeld base: `https://<studio-host>` (bijv. `https://draughts-studio.onrender.com`).
 
+### 1.1 Optioneel: zelfde pad via Kid Draughts API (proxy)
+
+Als de game-server **`https://draughts-api.onrender.com`** als enige base URL gebruikt, kan playback daar ook (na deploy) worden aangeroepen op **hetzelfde pad** als Studio: **`/api/steps/...`**.
+
+- De API stuurt de request door naar **`INTERNAL_API_BASE_URL`** (Studio-origin).
+- **Auth Kid Draughts:** header **`x-api-key`** (zelfde als andere `/api/*`-calls).
+- **Auth Studio (doorgezet):** **`x-owner-type`** / **`x-owner-id`** op de request; ontbrekend → fallback `PLAYBACK_OWNER_TYPE` / `PLAYBACK_OWNER_ID` op de server (zoals de puzzle-bridge).
+
+Zonder `INTERNAL_API_BASE_URL` → **503** `PLAYBACK_UPSTREAM_NOT_CONFIGURED`.
+
 ---
 
 ## 2. Authenticatie / owner context
