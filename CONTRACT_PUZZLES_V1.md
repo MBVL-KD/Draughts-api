@@ -104,9 +104,17 @@ Pas daarna return:
     "hintsUsed": 1,
     "mistakes": 0,
     "usedSolution": false
-  }
+  },
+  "hadMistake": false,
+  "resultTier": "perfect",
+  "endedBy": "solved"
 }
 ```
+
+Extra runtime-velden (optioneel, aanbevolen voor lessons free-play):
+- `hadMistake`: `boolean`
+- `resultTier`: `"perfect" | "recovered" | "unsolved"`
+- `endedBy`: bv. `"solved" | "no_legal_moves" | "no_pieces" | "in_progress"`
 
 ### Validatie (hard)
 
@@ -126,6 +134,7 @@ Pas daarna return:
 
 Server leidt `actualScore` af uit `outcome/timeMs/hintsUsed/mistakes/usedSolution`.  
 Client stuurt geen `progressScore` voor ratingbesluit (optioneel alleen telemetry).
+`resultTier`/`endedBy` worden opgeslagen voor analytics/aggregates en zijn backwards compatible (defaults als ze ontbreken).
 
 ### Idempotency-hardening
 

@@ -6,6 +6,7 @@ const PUZZLE_K = 6;
 const PUZZLE_RATING_MIN_PLAYS = 20;
 const PROFILE_RECENT_CAP = 50;
 const PLAYER_DEFAULT_RATING = 800;
+const KNOWN_ENDED_BY = new Set(["in_progress", "solved", "no_legal_moves", "no_pieces", "unsolved"]);
 
 function normalizePlayerId(playerId) {
   return String(playerId);
@@ -34,6 +35,23 @@ function computeActualScore(result) {
   const hintPenalty = clamp(result.hintsUsed * 0.08, 0, 0.35);
   const mistakePenalty = clamp(result.mistakes * 0.05, 0, 0.25);
   return clamp(1 - timePenalty - hintPenalty - mistakePenalty, 0.5, 1);
+}
+
+function normalizeResultMeta(input) {
+  const solved = Boolean(input?.result?.solved);
+  const mistakes = Number(input?.result?.mistakes || 0);
+  const hadMistake = typeof input?.hadMistake === "boolean" ? input.hadMistake : mistakes > 0;
+  const resultTier =
+    input?.resultTier ||
+    (solved ? (hadMistake ? "recovered" : "perfect") : "unsolved");
+  const endedByRaw = typeof input?.endedBy === "string" ? input.endedBy.trim().toLowerCase() : "";
+  const endedBy = endedByRaw || (solved ? "solved" : "unsolved");
+  return {
+    hadMistake,
+    resultTier,
+    endedBy,
+    endedByBucket: KNOWN_ENDED_BY.has(endedBy) ? endedBy : "other",
+  };
 }
 
 function updateRollingAverage(currentAvg, currentCount, nextValue) {
@@ -97,6 +115,7 @@ export async function submitPuzzleResult(input) {
   const puzzleRatingBefore = Number(puzzle?.rating?.value || PLAYER_DEFAULT_RATING);
   const expected = expectedScore(playerRatingBefore, puzzleRatingBefore);
   const actual = computeActualScore(input.result);
+  const resultMeta = normalizeResultMeta(input);
 
   const playerDelta = Math.round(PLAYER_K * (actual - expected));
   const playerRatingAfter = playerRatingBefore + playerDelta;
@@ -118,6 +137,7 @@ export async function submitPuzzleResult(input) {
     stepVersion: input.stepVersion || null,
     contentVersion: input.contentVersion || null,
     finalFen: input.finalFen || null,
+    resultMeta,
     expectedScore: expected,
     actualScore: actual,
     ratingDeltaPlayer: playerDelta,
@@ -174,6 +194,12 @@ export async function submitPuzzleResult(input) {
         "stats.failed": Number(profile?.stats?.failed || 0) + (input.result.solved ? 0 : 1),
         "stats.avgTimeMs": updateRollingAverage(previousAvgTime, previousAttempts, input.result.timeMs),
         "stats.hintRate": updateRollingAverage(previousHintRate, previousAttempts, input.result.hintsUsed > 0 ? 1 : 0),
+        "stats.perfectSolved":
+          Number(profile?.stats?.perfectSolved || 0) + (resultMeta.resultTier === "perfect" ? 1 : 0),
+        "stats.recoveredSolved":
+          Number(profile?.stats?.recoveredSolved || 0) + (resultMeta.resultTier === "recovered" ? 1 : 0),
+        "stats.unsolvedTerminal":
+          Number(profile?.stats?.unsolvedTerminal || 0) + (resultMeta.resultTier === "unsolved" ? 1 : 0),
       },
     }
   );
@@ -200,7 +226,11 @@ export async function submitPuzzleResult(input) {
         ),
         "rating.plays": Number(puzzle?.rating?.plays || 0) + 1,
       },
-      ...(shouldUpdatePuzzleRating ? { $inc: { "rating.value": puzzleDelta } } : {}),
+      $inc: {
+        ...(shouldUpdatePuzzleRating ? { "rating.value": puzzleDelta } : {}),
+        [`aggregates.resultTier.${resultMeta.resultTier}`]: 1,
+        [`aggregates.endedBy.${resultMeta.endedByBucket}`]: 1,
+      },
     }
   );
 

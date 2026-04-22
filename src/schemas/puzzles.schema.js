@@ -25,6 +25,8 @@ const flatResultFieldsSchema = z.object({
   mistakes: z.number().int().min(0).max(100),
 });
 
+const resultTierSchema = z.enum(["perfect", "recovered", "unsolved"]);
+
 const lessonProgressSchema = z.object({
   bookId: z.string().min(1),
   lessonId: z.string().min(1),
@@ -49,6 +51,9 @@ export const puzzleResultCompatSchema = z
     hintsUsed: z.number().int().min(0).max(100).optional(),
     attemptCount: z.number().int().min(1).max(50).optional(),
     mistakes: z.number().int().min(0).max(100).optional(),
+    hadMistake: z.boolean().optional(),
+    resultTier: resultTierSchema.optional(),
+    endedBy: z.string().min(1).max(64).optional(),
     stepVersion: z.string().max(120).optional(),
     contentVersion: z.string().max(120).optional(),
     finalFen: z.string().max(200).optional(),
@@ -72,6 +77,21 @@ export const puzzleResultCompatSchema = z
     }
   })
   .transform((value) => ({
+    // Runtime v2 fields are optional: derive sensible defaults when omitted.
+    // This keeps older clients compatible while allowing richer analytics.
+    resultTier:
+      value.resultTier ||
+      (value.result?.solved || value.solved
+        ? (value.hadMistake ||
+          Boolean((value.result?.mistakes ?? value.mistakes ?? 0) > 0)
+            ? "recovered"
+            : "perfect")
+        : "unsolved"),
+    hadMistake:
+      typeof value.hadMistake === "boolean"
+        ? value.hadMistake
+        : Boolean((value.result?.mistakes ?? value.mistakes ?? 0) > 0),
+    endedBy: value.endedBy || ((value.result?.solved || value.solved) ? "solved" : "unsolved"),
     attemptId: value.attemptId,
     playerId: value.playerId,
     sessionId: value.sessionId,

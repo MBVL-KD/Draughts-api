@@ -9,6 +9,7 @@ import playerSyncRoutes from "./routes/player-sync.routes.js";
 import tournamentsRouter from "./routes/tournaments.js";
 import puzzlesRoutes from "./routes/puzzles.routes.js";
 import playbackProxyRoutes from "./routes/playback-proxy.routes.js";
+import runtimeRoutes from "./routes/runtime.routes.js";
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use("/api/steps", playbackProxyRoutes);
 
 app.use("/api/player", playerSyncRoutes);
 app.use("/api", playersRouter)
+app.use("/api/runtime", runtimeRoutes);
 app.use("/api/matches", matchesRouter);
 app.use("/api/leaderboards", leaderboardsRouter);
 app.use("/api/tournaments", tournamentsRouter);
