@@ -77,9 +77,27 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
   const lang = typeof opts.lang === "string" && opts.lang.trim() ? opts.lang.trim() : "nl";
   const includePuzzles = opts.includePuzzles === true;
 
+  // Keep list endpoint light: fetch book metadata + lesson headers only.
+  // Avoid pulling full lesson step bodies for every book in the catalog call.
+  const booksProjection = {
+    bookId: 1,
+    id: 1,
+    title: 1,
+    description: 1,
+    accessModel: 1,
+    productId: 1,
+    sequenceIndex: 1,
+    unlockRules: 1,
+    tags: 1,
+    "lessons.lessonId": 1,
+    "lessons.id": 1,
+    "lessons.title": 1,
+    "lessons.isExam": 1,
+  };
+
   const [profile, booksRaw] = await Promise.all([
     db.collection("player_profiles").findOne({ userId }),
-    db.collection("books").find({ isDeleted: { $ne: true } }).toArray(),
+    db.collection("books").find({ isDeleted: { $ne: true } }, { projection: booksProjection }).toArray(),
   ]);
 
   const purchased = getPurchasedProductIds(profile || {});
