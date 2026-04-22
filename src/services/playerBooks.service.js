@@ -64,10 +64,12 @@ function sortBooks(items) {
 
 function isPuzzleBook(book) {
   const values = book?.title?.values;
-  if (!values || typeof values !== "object") return false;
-  const nl = typeof values.nl === "string" ? values.nl.trim().toLowerCase() : "";
-  const en = typeof values.en === "string" ? values.en.trim().toLowerCase() : "";
-  return nl === "puzzels" || en === "puzzles" || en === "puzzels";
+  const nl = values && typeof values === "object" && typeof values.nl === "string" ? values.nl.trim().toLowerCase() : "";
+  const en = values && typeof values === "object" && typeof values.en === "string" ? values.en.trim().toLowerCase() : "";
+  if (nl === "puzzels" || en === "puzzles" || en === "puzzels") return true;
+
+  const tags = safeArray(book?.tags).map((v) => (typeof v === "string" ? v.trim().toLowerCase() : ""));
+  return tags.some((t) => t.includes("puzzle") || t.includes("puzzel"));
 }
 
 export async function buildPlayerBooksResponse(userId, opts = {}) {
