@@ -83,15 +83,37 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
     "x-owner-type": ownerType,
     "x-owner-id": ownerId,
   };
-  async function fetchWithTimeout(url) {
+  async function fetchWithTimeout(url, routeTag) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+    const startedAt = Date.now();
     try {
-      return await fetch(url, {
+      const response = await fetch(url, {
         method: "GET",
         headers: commonHeaders,
         signal: controller.signal,
       });
+      const bodyText = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        responseSizeBytes: bodyText.length,
+        timeoutHit: false,
+        routeTag,
+        bodyText,
+      };
+    } catch (error) {
+      const timeoutHit = error?.name === "AbortError";
+      return {
+        ok: false,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        responseSizeBytes: 0,
+        timeoutHit,
+        routeTag,
+        errorMessage: String(error?.message || error),
+      };
     } finally {
       clearTimeout(timeout);
     }
@@ -99,17 +121,48 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
 
   const explicitUrl = `${baseUrl.replace(/\/$/, "")}/api/steps/book/${encodeURIComponent(bookId)}/lesson/${encodeURIComponent(lessonId)}/step/${encodeURIComponent(stepId)}?${qs.toString()}`;
   const globalUrl = `${baseUrl.replace(/\/$/, "")}/api/steps/${encodeURIComponent(stepId)}/playback?${qs.toString()}`;
-  let response = await fetchWithTimeout(explicitUrl);
+  let response = await fetchWithTimeout(explicitUrl, "explicit_context");
   if (!response.ok && (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 422)) {
-    response = await fetchWithTimeout(globalUrl);
+    response = await fetchWithTimeout(globalUrl, "global_step");
   }
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Playback request failed (${response.status}): ${body}`);
+    const err = new Error(
+      `Playback request failed (${response.status || "FETCH_ERROR"}): ${response.bodyText || response.errorMessage || ""}`
+    );
+    err.telemetry = {
+      statusFromStudio: response.status || null,
+      timeoutHit: response.timeoutHit === true,
+      responseSizeBytes: response.responseSizeBytes || 0,
+      playbackRoute: response.routeTag || null,
+      playbackHttpMs: response.durationMs || 0,
+    };
+    throw err;
   }
 
-  const json = await response.json();
-  return json?.item || null;
+  let json;
+  try {
+    json = JSON.parse(response.bodyText || "{}");
+  } catch (_error) {
+    const err = new Error("Playback response was not valid JSON");
+    err.telemetry = {
+      statusFromStudio: response.status || null,
+      timeoutHit: false,
+      responseSizeBytes: response.responseSizeBytes || 0,
+      playbackRoute: response.routeTag || null,
+      playbackHttpMs: response.durationMs || 0,
+    };
+    throw err;
+  }
+  return {
+    item: json?.item || null,
+    telemetry: {
+      statusFromStudio: response.status || null,
+      timeoutHit: false,
+      responseSizeBytes: response.responseSizeBytes || 0,
+      playbackRoute: response.routeTag || null,
+      playbackHttpMs: response.durationMs || 0,
+    },
+  };
 }
 
 async function getOrCreateProfile(db, playerId, variantId) {
@@ -141,6 +194,7 @@ function buildExcludedSet(recentPuzzleIds, passLimit, requestExcludes) {
 }
 
 export async function getNextPuzzle(input) {
+  const reqStartedAt = Date.now();
   if (input.mode === "ranked") {
     return { error: { status: 409, body: { ok: false, error: "RANKED_DISABLED" } } };
   }
@@ -159,6 +213,7 @@ export async function getNextPuzzle(input) {
 
   let selectedPass = ANTI_REPEAT_PASSES[ANTI_REPEAT_PASSES.length - 1];
   let candidates = [];
+  const selectStartedAt = Date.now();
   for (const pass of ANTI_REPEAT_PASSES) {
     const excludedIds = buildExcludedSet(profile?.recentPuzzleIds || [], pass, input.excludePuzzleIds || []);
     const query = {
@@ -197,21 +252,59 @@ export async function getNextPuzzle(input) {
   let selected = null;
   let playbackPayload = null;
   let candidateRetriesUsed = 0;
+  let attemptCount = 0;
+  let tPlaybackHttpMs = 0;
+  let statusFromStudio = null;
+  let timeoutHit = false;
+  let responseSizeBytes = 0;
+  let playbackRoute = null;
+  const tSelectPuzzleMs = Date.now() - selectStartedAt;
+  const tRetryWaitMs = 0;
   for (const candidate of shuffled.slice(0, MAX_PLAYBACK_RETRIES + 1)) {
+    attemptCount += 1;
     try {
-      playbackPayload = await fetchPlaybackPayload({
+      const playbackResult = await fetchPlaybackPayload({
         puzzle: candidate.puzzle,
         lang: input.lang,
         requiredLanguage: input.requiredLanguage,
       });
+      playbackPayload = playbackResult?.item || null;
+      tPlaybackHttpMs += Number(playbackResult?.telemetry?.playbackHttpMs || 0);
+      statusFromStudio = playbackResult?.telemetry?.statusFromStudio ?? statusFromStudio;
+      timeoutHit = Boolean(playbackResult?.telemetry?.timeoutHit);
+      responseSizeBytes = Number(playbackResult?.telemetry?.responseSizeBytes || responseSizeBytes);
+      playbackRoute = playbackResult?.telemetry?.playbackRoute || playbackRoute;
       if (playbackPayload) {
         selected = candidate.puzzle;
         break;
       }
-    } catch (_error) {
+    } catch (error) {
       candidateRetriesUsed += 1;
+      tPlaybackHttpMs += Number(error?.telemetry?.playbackHttpMs || 0);
+      statusFromStudio = error?.telemetry?.statusFromStudio ?? statusFromStudio;
+      timeoutHit = Boolean(error?.telemetry?.timeoutHit);
+      responseSizeBytes = Number(error?.telemetry?.responseSizeBytes || responseSizeBytes);
+      playbackRoute = error?.telemetry?.playbackRoute || playbackRoute;
     }
   }
+
+  const tTotalMs = Date.now() - reqStartedAt;
+  const timingLog = {
+    playerId,
+    mode: input.mode,
+    variantId: normalizedVariantId,
+    t_select_puzzle_ms: tSelectPuzzleMs,
+    t_playback_http_ms: tPlaybackHttpMs,
+    t_retry_wait_ms: tRetryWaitMs,
+    t_total_ms: tTotalMs,
+    attempt_count: attemptCount,
+    status_from_studio: statusFromStudio,
+    timeout_hit: timeoutHit,
+    response_size_bytes: responseSizeBytes,
+    playback_route: playbackRoute,
+    selected: Boolean(selected && playbackPayload),
+  };
+  console.info("[puzzles-next-timing]", JSON.stringify(timingLog));
 
   if (!selected || !playbackPayload) {
     return {
@@ -257,6 +350,15 @@ export async function getNextPuzzle(input) {
           windowMax: maxRating,
           candidateCount: candidates.length,
           candidateRetriesUsed,
+          t_select_puzzle_ms: tSelectPuzzleMs,
+          t_playback_http_ms: tPlaybackHttpMs,
+          t_retry_wait_ms: tRetryWaitMs,
+          t_total_ms: tTotalMs,
+          attempt_count: attemptCount,
+          status_from_studio: statusFromStudio,
+          timeout_hit: timeoutHit,
+          response_size_bytes: responseSizeBytes,
+          playback_route: playbackRoute,
         }
       : undefined,
     meta: {
