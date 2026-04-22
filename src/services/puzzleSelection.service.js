@@ -76,14 +76,24 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
   const qs = new URLSearchParams({ bookId, lessonId, lang: languages[0] });
   for (const item of languages) qs.append("requiredLanguage", item);
 
-  const url = `${baseUrl.replace(/\/$/, "")}/api/steps/${encodeURIComponent(stepId)}/playback?${qs.toString()}`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      "x-owner-type": ownerType,
-      "x-owner-id": ownerId,
-    },
-  });
+  // Use explicit context route to avoid expensive global step-ref scans in Studio.
+  const url = `${baseUrl.replace(/\/$/, "")}/api/steps/book/${encodeURIComponent(bookId)}/lesson/${encodeURIComponent(lessonId)}/step/${encodeURIComponent(stepId)}?${qs.toString()}`;
+  const timeoutMs = Number(process.env.PLAYBACK_FETCH_TIMEOUT_MS || 5000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "x-owner-type": ownerType,
+        "x-owner-id": ownerId,
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Playback request failed (${response.status}): ${body}`);
