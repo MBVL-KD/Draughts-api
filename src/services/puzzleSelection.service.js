@@ -76,7 +76,9 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
   const qs = new URLSearchParams({ bookId, lessonId, lang: languages[0] });
   for (const item of languages) qs.append("requiredLanguage", item);
 
-  const timeoutMs = Number(process.env.PLAYBACK_FETCH_TIMEOUT_MS || 5000);
+  // Studio playback can be slow on cold/large imports; keep a conservative default
+  // to preserve availability. Can still be tuned via env.
+  const timeoutMs = Number(process.env.PLAYBACK_FETCH_TIMEOUT_MS || 25000);
   const commonHeaders = {
     "x-owner-type": ownerType,
     "x-owner-id": ownerId,
