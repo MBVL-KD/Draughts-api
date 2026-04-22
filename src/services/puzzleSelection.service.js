@@ -6,10 +6,12 @@ const PLAYER_DEFAULT_RATING = 800;
 const PROFILE_RECENT_CAP = 50;
 const ANTI_REPEAT_PASSES = [50, 20, 10];
 const MAX_PLAYBACK_RETRIES = 3;
+const PLAYBACK_CACHE_TTL_MS = Number(process.env.PLAYBACK_CACHE_TTL_MS || 45000);
 const RATING_WINDOWS = {
   training: { minDelta: -50, maxDelta: 200 },
   lesson: { minDelta: -150, maxDelta: 100 },
 };
+const playbackCache = new Map();
 
 function normalizePlayerId(playerId) {
   return String(playerId);
@@ -71,8 +73,27 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
   if (!bookId || !lessonId || !stepId) {
     throw new Error("Puzzle contentRef is incomplete");
   }
+  const contentRef = `${bookId}:${lessonId}:${stepId}`;
 
   const languages = normalizeRequiredLanguages(lang, requiredLanguage);
+  const cacheKey = `${contentRef}:${languages.join(",")}`;
+  const now = Date.now();
+  const cached = playbackCache.get(cacheKey);
+  if (cached && cached.expiresAtMs > now) {
+    return {
+      item: cached.item,
+      telemetry: {
+        statusFromStudio: 200,
+        timeoutHit: false,
+        responseSizeBytes: cached.responseSizeBytes || 0,
+        playbackRoute: "cache_hit",
+        playbackHttpMs: 0,
+        contentRef,
+      },
+    };
+  }
+  if (cached && cached.expiresAtMs <= now) playbackCache.delete(cacheKey);
+
   const qs = new URLSearchParams({ bookId, lessonId, lang: languages[0] });
   for (const item of languages) qs.append("requiredLanguage", item);
 
@@ -135,6 +156,7 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
       responseSizeBytes: response.responseSizeBytes || 0,
       playbackRoute: response.routeTag || null,
       playbackHttpMs: response.durationMs || 0,
+      contentRef,
     };
     throw err;
   }
@@ -150,17 +172,27 @@ async function fetchPlaybackPayload({ puzzle, lang, requiredLanguage }) {
       responseSizeBytes: response.responseSizeBytes || 0,
       playbackRoute: response.routeTag || null,
       playbackHttpMs: response.durationMs || 0,
+      contentRef,
     };
     throw err;
   }
+  const item = json?.item || null;
+  if (item) {
+    playbackCache.set(cacheKey, {
+      item,
+      responseSizeBytes: response.responseSizeBytes || 0,
+      expiresAtMs: Date.now() + Math.max(30000, Math.min(60000, PLAYBACK_CACHE_TTL_MS)),
+    });
+  }
   return {
-    item: json?.item || null,
+    item,
     telemetry: {
       statusFromStudio: response.status || null,
       timeoutHit: false,
       responseSizeBytes: response.responseSizeBytes || 0,
       playbackRoute: response.routeTag || null,
       playbackHttpMs: response.durationMs || 0,
+      contentRef,
     },
   };
 }
@@ -258,6 +290,7 @@ export async function getNextPuzzle(input) {
   let timeoutHit = false;
   let responseSizeBytes = 0;
   let playbackRoute = null;
+  let contentRef = null;
   const tSelectPuzzleMs = Date.now() - selectStartedAt;
   const tRetryWaitMs = 0;
   for (const candidate of shuffled.slice(0, MAX_PLAYBACK_RETRIES + 1)) {
@@ -274,6 +307,7 @@ export async function getNextPuzzle(input) {
       timeoutHit = Boolean(playbackResult?.telemetry?.timeoutHit);
       responseSizeBytes = Number(playbackResult?.telemetry?.responseSizeBytes || responseSizeBytes);
       playbackRoute = playbackResult?.telemetry?.playbackRoute || playbackRoute;
+      contentRef = playbackResult?.telemetry?.contentRef || contentRef;
       if (playbackPayload) {
         selected = candidate.puzzle;
         break;
@@ -285,6 +319,7 @@ export async function getNextPuzzle(input) {
       timeoutHit = Boolean(error?.telemetry?.timeoutHit);
       responseSizeBytes = Number(error?.telemetry?.responseSizeBytes || responseSizeBytes);
       playbackRoute = error?.telemetry?.playbackRoute || playbackRoute;
+      contentRef = error?.telemetry?.contentRef || contentRef;
     }
   }
 
@@ -301,6 +336,7 @@ export async function getNextPuzzle(input) {
     status_from_studio: statusFromStudio,
     timeout_hit: timeoutHit,
     response_size_bytes: responseSizeBytes,
+    content_ref: contentRef,
     playback_route: playbackRoute,
     selected: Boolean(selected && playbackPayload),
   };
