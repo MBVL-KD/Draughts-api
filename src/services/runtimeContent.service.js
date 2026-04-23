@@ -123,20 +123,14 @@ export async function buildRuntimeBookLessonsResponse(userId, bookId, opts = {})
   const db = getDb();
   const bookDoc = await db
     .collection("books")
-    .findOne({ isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] }, { projection: { lessons: 1, revision: 1 } });
-  const lessonsById = new Map(
-    safeArray(bookDoc?.lessons).map((l) => [typeof l?.lessonId === "string" ? l.lessonId : l?.id, l])
-  );
+    .findOne({ isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] }, { projection: { revision: 1 } });
 
-  const lessons = safeArray(detail.lessons).map((l) => {
-    const source = lessonsById.get(l.lessonId);
-    const totals = lessonTotals(source);
-    return {
-      ...l,
-      totalSteps: totals.totalSteps,
-      entryStepId: l.entryStepId || totals.entryStepId || null,
-    };
-  });
+  // detail.lessons already contains entryStepId and progress.totalSteps from the lessons collection
+  const lessons = safeArray(detail.lessons).map((l) => ({
+    ...l,
+    totalSteps: l.progress?.totalSteps ?? 0,
+    entryStepId: l.entryStepId || null,
+  }));
 
   return {
     ok: true,
@@ -166,36 +160,34 @@ export async function buildRuntimeLessonStepsResponse(input) {
   const limit = Math.max(1, Math.min(MAX_STEPS_LIMIT, reqLimit));
   const lang = typeof input.lang === "string" && input.lang.trim() ? input.lang.trim() : "nl";
 
-  const docs = await db
-    .collection("books")
-    .aggregate([
-      { $match: { isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] } },
-      {
-        $project: {
-          bookId: { $ifNull: ["$bookId", "$id"] },
-          revision: "$revision",
-          lessons: {
-            $filter: {
-              input: { $ifNull: ["$lessons", []] },
-              as: "lesson",
-              cond: { $eq: [{ $ifNull: ["$$lesson.lessonId", "$$lesson.id"] }, lessonId] },
-            },
-          },
-        },
-      },
-      { $limit: 1 },
-    ])
-    .toArray();
+  const [bookDoc, lessonDoc] = await Promise.all([
+    db.collection("books").findOne(
+      { isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] },
+      { projection: { bookId: 1, id: 1, revision: 1 } }
+    ),
+    db.collection("lessons").findOne(
+      { isDeleted: { $ne: true }, bookId, $or: [{ lessonId }, { id: lessonId }] },
+      { projection: { stepIds: 1 } }
+    ),
+  ]);
 
-  const book = docs[0];
-  if (!book) return { error: { status: 404, body: { ok: false, error: "BOOK_NOT_FOUND" } } };
-  const lesson = safeArray(book.lessons)[0];
-  if (!lesson) return { error: { status: 404, body: { ok: false, error: "LESSON_NOT_FOUND" } } };
+  if (!bookDoc) return { error: { status: 404, body: { ok: false, error: "BOOK_NOT_FOUND" } } };
+  if (!lessonDoc) return { error: { status: 404, body: { ok: false, error: "LESSON_NOT_FOUND" } } };
 
-  const allSteps = safeArray(lesson.steps);
-  const totalSteps = allSteps.length;
-  const steps = allSteps.slice(offset, offset + limit).map((step, index) => {
-    const stepId = typeof step?.stepId === "string" ? step.stepId : step?.id;
+  const allStepIds = safeArray(lessonDoc.stepIds).filter((id) => typeof id === "string" && id.trim());
+  const totalSteps = allStepIds.length;
+  const pageStepIds = allStepIds.slice(offset, offset + limit);
+
+  const stepDocs = pageStepIds.length > 0
+    ? await db.collection("steps").find(
+        { isDeleted: { $ne: true }, stepId: { $in: pageStepIds } },
+        { projection: { stepId: 1, id: 1, type: 1, orderIndex: 1, title: 1, prompt: 1, hint: 1, initialState: 1 } }
+      ).toArray()
+    : [];
+
+  const stepById = new Map(stepDocs.map((s) => [s.stepId || s.id, s]));
+  const steps = pageStepIds.map((stepId, index) => {
+    const step = stepById.get(stepId);
     return {
       stepId,
       stepType: step?.type || null,
@@ -211,11 +203,12 @@ export async function buildRuntimeLessonStepsResponse(input) {
 
   const nextOffset = offset + steps.length;
   const hasMore = nextOffset < totalSteps;
-  const revision = Number.isFinite(book?.revision) ? book.revision : null;
+  const revision = Number.isFinite(bookDoc?.revision) ? bookDoc.revision : null;
+  const resolvedBookId = typeof bookDoc.bookId === "string" ? bookDoc.bookId : bookDoc.id || bookId;
   return {
     ok: true,
     schemaVersion: 1,
-    bookId: book.bookId || bookId,
+    bookId: resolvedBookId,
     lessonId,
     revision,
     etag: revision == null ? null : `book:${bookId}:rev:${revision}:lesson:${lessonId}:offset:${offset}:limit:${limit}`,

@@ -94,14 +94,12 @@ export async function patchLessonProgress(req, res) {
 
   try {
     const db = getDb();
-    const book = await db.collection("books").findOne({
+    const lessonDoc = await db.collection("lessons").findOne({
       isDeleted: { $ne: true },
-      $or: [{ bookId: b.value }, { id: b.value }],
+      bookId: b.value,
+      $or: [{ lessonId: l.value }, { id: l.value }],
     });
-    const lesson = Array.isArray(book?.lessons)
-      ? book.lessons.find((row) => (row?.lessonId || row?.id) === l.value)
-      : null;
-    const isExam = lesson?.isExam === true;
+    const isExam = lessonDoc?.isExam === true;
 
     const result = await upsertLessonProgress({
       playerId: String(userId),
