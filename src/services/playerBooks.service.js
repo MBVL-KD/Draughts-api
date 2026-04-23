@@ -20,8 +20,13 @@ function normalizeUnlockRules(raw) {
   const obj = raw && typeof raw === "object" ? raw : {};
   return {
     type: obj.type === "requires_exams" ? "requires_exams" : "none",
-    requiredBookId: typeof obj.requiredBookId === "string" && obj.requiredBookId.trim() ? obj.requiredBookId : null,
-    requiredExamLessonIds: safeArray(obj.requiredExamLessonIds).filter((v) => typeof v === "string" && v.trim()),
+    requiredBookId:
+      typeof obj.requiredBookId === "string" && obj.requiredBookId.trim()
+        ? obj.requiredBookId
+        : null,
+    requiredExamLessonIds: safeArray(obj.requiredExamLessonIds).filter(
+      (v) => typeof v === "string" && v.trim()
+    ),
     requiredPassMode: obj.requiredPassMode === "any" ? "any" : "all",
   };
 }
@@ -64,12 +69,10 @@ function sortBooks(items) {
 
 function isPuzzleBook(book) {
   const values = book?.title?.values;
-  const nl = values && typeof values === "object" && typeof values.nl === "string" ? values.nl.trim().toLowerCase() : "";
-  const en = values && typeof values === "object" && typeof values.en === "string" ? values.en.trim().toLowerCase() : "";
-  if (nl === "puzzels" || en === "puzzles" || en === "puzzels") return true;
-
-  const tags = safeArray(book?.tags).map((v) => (typeof v === "string" ? v.trim().toLowerCase() : ""));
-  return tags.some((t) => t.includes("puzzle") || t.includes("puzzel"));
+  if (!values || typeof values !== "object") return false;
+  const nl = typeof values.nl === "string" ? values.nl.trim().toLowerCase() : "";
+  const en = typeof values.en === "string" ? values.en.trim().toLowerCase() : "";
+  return nl === "puzzels" || en === "puzzles" || en === "puzzels";
 }
 
 export async function buildPlayerBooksResponse(userId, opts = {}) {
@@ -77,54 +80,58 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
   const lang = typeof opts.lang === "string" && opts.lang.trim() ? opts.lang.trim() : "nl";
   const includePuzzles = opts.includePuzzles === true;
 
-  // Keep list endpoint light: fetch book metadata + lesson headers only.
-  // Avoid pulling full lesson step bodies for every book in the catalog call.
-  const booksProjection = {
-    bookId: 1,
-    id: 1,
-    title: 1,
-    description: 1,
-    accessModel: 1,
-    productId: 1,
-    sequenceIndex: 1,
-    unlockRules: 1,
-    tags: 1,
-    "lessons.lessonId": 1,
-    "lessons.id": 1,
-    "lessons.title": 1,
-    "lessons.isExam": 1,
-  };
-
-  const [profile, booksRaw] = await Promise.all([
+  const [profile, booksRaw, lessonsRaw] = await Promise.all([
     db.collection("player_profiles").findOne({ userId }),
-    db.collection("books").find({ isDeleted: { $ne: true } }, { projection: booksProjection }).toArray(),
+    db.collection("books").find({ isDeleted: { $ne: true } }).toArray(),
+    db.collection("lessons").find({ isDeleted: { $ne: true } }).toArray(),
   ]);
 
   const purchased = getPurchasedProductIds(profile || {});
   const passedExamLessonIds = getPassedExamLessonIds(profile || {});
 
+  // Group lessons by bookId for quick lookup
+  const lessonsByBookId = new Map();
+  for (const lesson of lessonsRaw) {
+    const bid = typeof lesson?.bookId === "string" ? lesson.bookId : "";
+    if (!bid) continue;
+    if (!lessonsByBookId.has(bid)) lessonsByBookId.set(bid, []);
+    lessonsByBookId.get(bid).push(lesson);
+  }
+
   const booksById = new Map();
   for (const book of booksRaw) {
     const id = book?.bookId || book?.id;
-    if (typeof id === "string" && id.trim()) {
-      booksById.set(id, book);
-    }
+    if (typeof id === "string" && id.trim()) booksById.set(id, book);
   }
 
   const items = [];
   for (const book of booksRaw) {
-    if (!includePuzzles && isPuzzleBook(book)) {
-      continue;
-    }
-    const bookId = typeof book?.bookId === "string" ? book.bookId : typeof book?.id === "string" ? book.id : null;
+    if (!includePuzzles && isPuzzleBook(book)) continue;
+
+    const bookId =
+      typeof book?.bookId === "string"
+        ? book.bookId
+        : typeof book?.id === "string"
+          ? book.id
+          : null;
     if (!bookId) continue;
 
     const accessModel = book?.accessModel === "paid" ? "paid" : "free";
     const productId = typeof book?.productId === "string" ? book.productId : "";
     const unlockRules = normalizeUnlockRules(book?.unlockRules);
-    const sequenceIndex = Number.isFinite(Number(book?.sequenceIndex)) ? Math.trunc(Number(book.sequenceIndex)) : 9999;
-    const lessons = safeArray(book?.lessons).map((l) => ({
-      lessonId: typeof l?.lessonId === "string" ? l.lessonId : typeof l?.id === "string" ? l.id : null,
+    const sequenceIndex = Number.isFinite(Number(book?.sequenceIndex))
+      ? Math.trunc(Number(book.sequenceIndex))
+      : 9999;
+
+    // Lessons from the separate lessons collection
+    const bookLessons = lessonsByBookId.get(bookId) ?? [];
+    const lessons = bookLessons.map((l) => ({
+      lessonId:
+        typeof l?.lessonId === "string"
+          ? l.lessonId
+          : typeof l?.id === "string"
+            ? l.id
+            : null,
       title: l?.title || null,
       isExam: l?.isExam === true,
     }));
@@ -135,9 +142,9 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
     if (unlockRules.type === "requires_exams") {
       if (unlockRules.requiredExamLessonIds.length > 0) {
         requiredExamLessonIds = [...unlockRules.requiredExamLessonIds];
-      } else if (unlockRules.requiredBookId && booksById.has(unlockRules.requiredBookId)) {
-        const reqBook = booksById.get(unlockRules.requiredBookId);
-        requiredExamLessonIds = safeArray(reqBook?.lessons)
+      } else if (unlockRules.requiredBookId) {
+        const reqBookLessons = lessonsByBookId.get(unlockRules.requiredBookId) ?? [];
+        requiredExamLessonIds = reqBookLessons
           .filter((l) => l?.isExam === true)
           .map((l) => l?.lessonId || l?.id)
           .filter((id) => typeof id === "string" && id.trim());
@@ -150,7 +157,9 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
     const examGateOk =
       unlockRules.type !== "requires_exams" ||
       requiredExamCount === 0 ||
-      (unlockRules.requiredPassMode === "any" ? passedExamCount >= 1 : passedExamCount >= requiredExamCount);
+      (unlockRules.requiredPassMode === "any"
+        ? passedExamCount >= 1
+        : passedExamCount >= requiredExamCount);
 
     const lockReasons = [];
     if (!entitlementOk && accessModel === "paid") lockReasons.push("LOCKED_PURCHASE_REQUIRED");
@@ -187,39 +196,27 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
   };
 }
 
-function lessonTotalStepsFromBook(lesson) {
-  const authoring = lesson?.authoringV2?.authoringLesson;
-  const ids = safeArray(authoring?.stepIds).filter((id) => typeof id === "string" && id.trim());
-  if (ids.length) return ids.length;
-  return safeArray(lesson?.steps).length;
-}
-
-function entryStepIdFromBook(lesson) {
-  const authoring = lesson?.authoringV2?.authoringLesson;
-  const explicit = authoring?.entryStepId;
-  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
-  const ids = safeArray(authoring?.stepIds).filter((id) => typeof id === "string" && id.trim());
-  if (ids.length) return ids[0];
-  const steps = safeArray(lesson?.steps);
-  const first = steps[0];
-  const sid = first?.stepId || first?.id;
-  return typeof sid === "string" && sid.trim() ? sid.trim() : null;
-}
-
-function progressFromDoc(doc, lesson) {
+function progressFromDoc(doc, stepCount) {
   const completedSteps = safeArray(doc?.completedStepIds).length;
   const totalFromDoc = Number(doc?.totalStepsKnown);
   const docTotal =
     Number.isFinite(totalFromDoc) && totalFromDoc >= 0 ? Math.trunc(totalFromDoc) : Number.NaN;
-  const fromBook = lesson ? lessonTotalStepsFromBook(lesson) : 0;
-  const totalSteps = Math.max(fromBook, Number.isFinite(docTotal) ? docTotal : 0, completedSteps);
-  const percent = totalSteps > 0 ? Math.round((Math.min(completedSteps, totalSteps) / totalSteps) * 100) : 0;
+  const totalSteps = Math.max(
+    stepCount,
+    Number.isFinite(docTotal) ? docTotal : 0,
+    completedSteps
+  );
+  const percent =
+    totalSteps > 0
+      ? Math.round((Math.min(completedSteps, totalSteps) / totalSteps) * 100)
+      : 0;
   return { completedSteps, totalSteps, percent };
 }
 
 function lessonStatus(bookEligible, progress) {
   if (!bookEligible) return "locked";
-  if (progress.totalSteps > 0 && progress.completedSteps >= progress.totalSteps) return "completed";
+  if (progress.totalSteps > 0 && progress.completedSteps >= progress.totalSteps)
+    return "completed";
   if (progress.completedSteps > 0) return "in_progress";
   return "not_started";
 }
@@ -229,9 +226,10 @@ export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
   const lang = typeof opts.lang === "string" && opts.lang.trim() ? opts.lang.trim() : "nl";
   const playerId = String(userId);
 
-  const [catalog, bookDoc, lessonProgressRows] = await Promise.all([
+  const [catalog, bookDoc, lessonsRaw, lessonProgressRows] = await Promise.all([
     buildPlayerBooksResponse(userId, { lang, includePuzzles: true }),
     db.collection("books").findOne({ isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] }),
+    db.collection("lessons").find({ isDeleted: { $ne: true }, bookId }).toArray(),
     db.collection("player_lesson_progress").find({ playerId, bookId }).toArray(),
   ]);
 
@@ -247,29 +245,44 @@ export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
     }
   }
 
-  const lessons = safeArray(bookDoc.lessons).map((lesson) => {
+  const lessons = lessonsRaw.map((lesson) => {
     const lessonId =
-      typeof lesson?.lessonId === "string" ? lesson.lessonId : typeof lesson?.id === "string" ? lesson.id : null;
+      typeof lesson?.lessonId === "string"
+        ? lesson.lessonId
+        : typeof lesson?.id === "string"
+          ? lesson.id
+          : null;
     const isExam = lesson?.isExam === true;
+
+    // v2: entryStepId and stepIds live directly on the lesson document
+    const entryStepId =
+      typeof lesson?.entryStepId === "string" && lesson.entryStepId.trim()
+        ? lesson.entryStepId.trim()
+        : safeArray(lesson?.stepIds).find((id) => typeof id === "string" && id.trim()) ?? null;
+
+    const stepCount = safeArray(lesson?.stepIds).filter(
+      (id) => typeof id === "string" && id.trim()
+    ).length;
+
     const progressDoc = lessonId ? progressByLessonId.get(lessonId) : null;
-    const entryStepId = entryStepIdFromBook(lesson);
     const furthestStepId =
       typeof progressDoc?.furthestStepId === "string" && progressDoc.furthestStepId.trim()
         ? progressDoc.furthestStepId.trim()
         : null;
     const resumeStepId = furthestStepId || entryStepId;
-    const progress = progressFromDoc(progressDoc, lesson);
+    const progress = progressFromDoc(progressDoc, stepCount);
     const status = lessonStatus(bookListRow.eligible, progress);
     const attempted = progressDoc != null;
     const passed = status === "completed";
-    const canRetake = isExam ? false : true;
+    const canRetake = !isExam;
     const examBlocked = isExam && !canRetake && status === "completed";
     const canProceed =
       bookListRow.eligible &&
       status !== "locked" &&
       !examBlocked &&
       (status === "not_started" || status === "in_progress" || status === "completed");
-    const canRestart = bookListRow.eligible && status !== "locked" && !examBlocked && status !== "not_started";
+    const canRestart =
+      bookListRow.eligible && status !== "locked" && !examBlocked && status !== "not_started";
     const disabledReason =
       status === "locked" ? "BOOK_LOCKED" : examBlocked ? "EXAM_ALREADY_ATTEMPTED" : null;
 
