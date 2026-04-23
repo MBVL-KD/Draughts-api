@@ -702,61 +702,91 @@ export async function getProfileSnapshot(req, res) {
     });
   }
 
-  let profile = await db.collection("player_profiles").findOne({ userId });
+  const [profileRaw, ratings, recentMatchesRaw, statsAgg, recentTournamentsRaw, puzzleStatsResult] =
+    await Promise.all([
+      db.collection("player_profiles").findOne({ userId }),
+      db.collection("player_ratings").find({ userId }).sort({ bucket: 1 }).toArray(),
+      db
+        .collection("matches")
+        .find({ $or: [{ whiteUserId: userId }, { blackUserId: userId }] })
+        .sort({ endedAtUnix: -1, _id: -1 })
+        .limit(20)
+        .toArray(),
+      db
+        .collection("matches")
+        .aggregate([
+          {
+            $match: {
+              $or: [{ whiteUserId: userId }, { blackUserId: userId }],
+              countsForProfileStats: { $ne: false },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              wins: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $and: [{ $eq: ["$result", "1-0"] }, { $eq: ["$whiteUserId", userId] }] },
+                        { $and: [{ $eq: ["$result", "0-1"] }, { $eq: ["$blackUserId", userId] }] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              losses: {
+                $sum: {
+                  $cond: [
+                    {
+                      $or: [
+                        { $and: [{ $eq: ["$result", "0-1"] }, { $eq: ["$whiteUserId", userId] }] },
+                        { $and: [{ $eq: ["$result", "1-0"] }, { $eq: ["$blackUserId", userId] }] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              draws: { $sum: { $cond: [{ $eq: ["$result", "1/2-1/2"] }, 1, 0] } },
+            },
+          },
+        ])
+        .toArray(),
+      db
+        .collection("tournaments")
+        .find({ recordType: "tournament_snapshot", status: "ended", "standings.userId": userId })
+        .sort({ endAt: -1, _id: -1 })
+        .limit(10)
+        .toArray(),
+      buildPuzzleStatsResponse(userId).catch((err) => {
+        console.error("getProfileSnapshot puzzleStats:", err);
+        return null;
+      }),
+    ]);
 
-  if (!profile) {
-    profile = {
-      userId,
-      coins: 0,
-      level: 1,
-      xp: 0,
-      firstSeenAtUnix: null,
-      lastSeenAtUnix: null,
-      badges: [],
-      stats: {
-        gamesTotal: 0,
-        wins: 0,
-        losses: 0,
-        draws: 0,
-      },
-    };
-  }
+  const profile = profileRaw ?? {
+    userId,
+    coins: 0,
+    level: 1,
+    xp: 0,
+    firstSeenAtUnix: null,
+    lastSeenAtUnix: null,
+    badges: [],
+    stats: { gamesTotal: 0, wins: 0, losses: 0, draws: 0 },
+  };
 
-  const ratings = await db
-    .collection("player_ratings")
-    .find({ userId })
-    .sort({ bucket: 1 })
-    .toArray();
-
-  const recentMatchesRaw = await db
-    .collection("matches")
-    .find({
-      $or: [{ whiteUserId: userId }, { blackUserId: userId }],
-    })
-    .sort({ endedAtUnix: -1, _id: -1 })
-    .limit(20)
-    .toArray();
-
-  const countedMatches = await db
-    .collection("matches")
-    .find({
-      $or: [{ whiteUserId: userId }, { blackUserId: userId }],
-      countsForProfileStats: { $ne: false },
-    })
-    .toArray();
-
-  const recentTournamentsRaw = await db
-    .collection("tournaments")
-    .find({
-      recordType: "tournament_snapshot",
-      status: "ended",
-      "standings.userId": userId,
-    })
-    .sort({ endAt: -1, _id: -1 })
-    .limit(10)
-    .toArray();
-
-  const stats = calculateStatsForUser(countedMatches, userId);
+  const statsRow = statsAgg[0] ?? { wins: 0, losses: 0, draws: 0 };
+  const stats = {
+    wins: statsRow.wins,
+    losses: statsRow.losses,
+    draws: statsRow.draws,
+    gamesTotal: statsRow.wins + statsRow.losses + statsRow.draws,
+  };
 
   const recentMatches = recentMatchesRaw.map((matchDoc) =>
     mapMatchForUser(matchDoc, userId)
@@ -765,6 +795,8 @@ export async function getProfileSnapshot(req, res) {
   const recentTournaments = recentTournamentsRaw.map((doc) =>
     mapTournamentSnapshotForUser(doc, userId)
   );
+
+  const puzzleStats = puzzleStatsResult;
 
   const mergedProfile = {
     ...profile,
@@ -783,13 +815,6 @@ export async function getProfileSnapshot(req, res) {
       draws: stats.draws,
     },
   };
-
-  let puzzleStats = null;
-  try {
-    puzzleStats = await buildPuzzleStatsResponse(userId);
-  } catch (err) {
-    console.error("getProfileSnapshot puzzleStats:", err);
-  }
 
   const educationPublic = {
     schemaVersion: EDUCATION_PUBLIC_SCHEMA_VERSION,
