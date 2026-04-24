@@ -23,7 +23,8 @@ export async function syncPlayer(req, res) {
         username,
         displayName,
         lastSeenAtUnix: now,
-        updatedAtUnix: now
+        updatedAtUnix: now,
+        status: "active",
       },
       $setOnInsert: {
         userId,
@@ -43,6 +44,15 @@ export async function syncPlayer(req, res) {
     },
     { upsert: true }
   );
+
+  // For pre-registered records being activated for the first time,
+  // firstSeenAtUnix was null — set it now.
+  if (result.upsertedCount === 0) {
+    await db.collection("player_profiles").updateOne(
+      { userId, firstSeenAtUnix: null },
+      { $set: { firstSeenAtUnix: now } }
+    );
+  }
 
   res.json({
     ok: true,

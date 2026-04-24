@@ -12,6 +12,9 @@ await db.collection("player_ratings").createIndex({ userId: 1, bucket: 1 }, { un
 await db.collection("player_rating_history").createIndex({ userId: 1, processedAtUnix: -1 });
 await db.collection("player_rating_history").createIndex({ matchId: 1 });
 await db.collection("player_profiles").createIndex({ userId: 1 }, { unique: true });
+await db.collection("player_profiles").createIndex({ "externalRefs.childRef": 1 }, { sparse: true });
+await db.collection("admin_tournaments").createIndex({ tournamentId: 1 }, { unique: true });
+await db.collection("admin_tournaments").createIndex({ countryId: 1, createdAtUnix: -1 });
 await db.collection("player_puzzle_profiles").createIndex({ playerId: 1, variantId: 1 }, { unique: true });
 await db.collection("puzzle_attempts").createIndex({ attemptId: 1 }, { unique: true });
 await db.collection("puzzle_attempts").createIndex({ playerId: 1, playedAtUnix: -1 });
