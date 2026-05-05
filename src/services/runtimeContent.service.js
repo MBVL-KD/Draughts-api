@@ -24,16 +24,20 @@ function textForLang(localized, lang = "nl") {
 }
 
 function lessonTotals(lesson) {
+  const stepIds = safeArray(lesson?.stepIds).filter((v) => typeof v === "string" && v.trim());
   const authoringStepIds = safeArray(lesson?.authoringV2?.authoringLesson?.stepIds).filter(
     (v) => typeof v === "string" && v.trim()
   );
-  const totalSteps = authoringStepIds.length > 0 ? authoringStepIds.length : safeArray(lesson?.steps).length;
+  const canonicalStepIds = stepIds.length > 0 ? stepIds : authoringStepIds;
+  const totalSteps = canonicalStepIds.length > 0 ? canonicalStepIds.length : safeArray(lesson?.steps).length;
   return {
     totalSteps,
     entryStepId:
-      (typeof lesson?.authoringV2?.authoringLesson?.entryStepId === "string" &&
-        lesson.authoringV2.authoringLesson.entryStepId.trim()) ||
-      (authoringStepIds[0] || safeArray(lesson?.steps)[0]?.stepId || safeArray(lesson?.steps)[0]?.id || null),
+      (typeof lesson?.entryStepId === "string" && lesson.entryStepId.trim()) ||
+      canonicalStepIds[0] ||
+      safeArray(lesson?.steps)[0]?.stepId ||
+      safeArray(lesson?.steps)[0]?.id ||
+      null,
   };
 }
 
