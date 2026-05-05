@@ -82,7 +82,7 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
 
   const [profile, booksRaw, lessonsRaw] = await Promise.all([
     db.collection("player_profiles").findOne({ userId }),
-    db.collection("books").find({ isDeleted: { $ne: true } }).toArray(),
+    db.collection("books").find({ isDeleted: { $ne: true }, status: "published" }).toArray(),
     db.collection("lessons").find({ isDeleted: { $ne: true } }).toArray(),
   ]);
 
@@ -123,8 +123,18 @@ export async function buildPlayerBooksResponse(userId, opts = {}) {
       ? Math.trunc(Number(book.sequenceIndex))
       : 9999;
 
-    // Lessons from the separate lessons collection
+    // Lessons from the separate lessons collection, sorted by book's canonical lessonIds order
     const bookLessons = lessonsByBookId.get(bookId) ?? [];
+    const bookLessonIdOrder = safeArray(book?.lessonIds);
+    if (bookLessonIdOrder.length > 0) {
+      bookLessons.sort((a, b) => {
+        const aId = a?.lessonId || a?.id || "";
+        const bId = b?.lessonId || b?.id || "";
+        const ai = bookLessonIdOrder.indexOf(aId);
+        const bi = bookLessonIdOrder.indexOf(bId);
+        return (ai === -1 ? 999999 : ai) - (bi === -1 ? 999999 : bi);
+      });
+    }
     const lessons = bookLessons.map((l) => ({
       lessonId:
         typeof l?.lessonId === "string"
@@ -228,7 +238,7 @@ export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
 
   const [catalog, bookDoc, lessonsRaw, lessonProgressRows] = await Promise.all([
     buildPlayerBooksResponse(userId, { lang, includePuzzles: true }),
-    db.collection("books").findOne({ isDeleted: { $ne: true }, $or: [{ bookId }, { id: bookId }] }),
+    db.collection("books").findOne({ isDeleted: { $ne: true }, status: "published", $or: [{ bookId }, { id: bookId }] }),
     db.collection("lessons").find({ isDeleted: { $ne: true }, bookId }).toArray(),
     db.collection("player_lesson_progress").find({ playerId, bookId }).toArray(),
   ]);
@@ -243,6 +253,18 @@ export async function buildBookLessonsResponse(userId, bookId, opts = {}) {
     if (typeof row?.lessonId === "string" && row.lessonId.trim()) {
       progressByLessonId.set(row.lessonId, row);
     }
+  }
+
+  // Sort lessons by the book's canonical lessonIds order
+  const bookLessonIds = safeArray(bookDoc?.lessonIds);
+  if (bookLessonIds.length > 0) {
+    lessonsRaw.sort((a, b) => {
+      const aId = a?.lessonId || a?.id || "";
+      const bId = b?.lessonId || b?.id || "";
+      const ai = bookLessonIds.indexOf(aId);
+      const bi = bookLessonIds.indexOf(bId);
+      return (ai === -1 ? 999999 : ai) - (bi === -1 ? 999999 : bi);
+    });
   }
 
   const lessons = lessonsRaw.map((lesson) => {
