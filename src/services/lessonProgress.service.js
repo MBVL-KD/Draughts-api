@@ -128,30 +128,10 @@ export async function upsertLessonProgress(input) {
     };
   }
 
-  const prevFurthest = existing?.furthestStepIndex != null ? toFiniteInt(existing.furthestStepIndex) : -1;
-  const prevFurthestSafe = prevFurthest === null ? -1 : prevFurthest;
-  const furthestStepIndex = Math.max(prevFurthestSafe, stepIndex);
-
-  let furthestStepId = existing?.furthestStepId ?? null;
-  if (stepIndex >= prevFurthestSafe) {
-    furthestStepId = stepId;
-  }
-
   const markStepCompleted = input.markStepCompleted !== false;
-  const completed = new Set(Array.isArray(existing?.completedStepIds) ? existing.completedStepIds : []);
-  if (markStepCompleted) {
-    completed.add(stepId);
-  }
-
-  let totalStepsKnown = existing?.totalStepsKnown ?? null;
   const totalStepsInput = input.totalSteps != null ? input.totalSteps : input.totalStepsKnown;
-  if (totalStepsInput != null) {
-    const ts = toFiniteInt(totalStepsInput);
-    if (ts !== null && ts >= 0) {
-      totalStepsKnown =
-        totalStepsKnown === null ? ts : Math.max(totalStepsKnown, ts);
-    }
-  }
+  const totalStepsKnownInput = toFiniteInt(totalStepsInput);
+  const hasTotalStepsInput = totalStepsKnownInput !== null && totalStepsKnownInput >= 0;
 
   const nowUnix = Math.floor(Date.now() / 1000);
   let nextBookRev = storedRev;
@@ -161,27 +141,44 @@ export async function upsertLessonProgress(input) {
     nextBookRev = toFiniteInt(existing.bookRevision);
   }
 
-  const nextDoc = {
+  const source =
+    typeof input.source === "string" && input.source.trim() ? input.source.trim() : "roblox";
+
+  // Use an atomic pipeline update so concurrent writes can't overwrite each other.
+  const setStage = {
     playerId,
     bookId,
     lessonId,
-    furthestStepIndex,
-    furthestStepId,
-    totalStepsKnown,
-    completedStepIds: [...completed],
+    furthestStepIndex: { $max: [{ $ifNull: ["$furthestStepIndex", -1] }, stepIndex] },
+    furthestStepId: {
+      $cond: [
+        { $gte: [stepIndex, { $ifNull: ["$furthestStepIndex", -1] }] },
+        stepId,
+        { $ifNull: ["$furthestStepId", null] },
+      ],
+    },
+    completedStepIds: markStepCompleted
+      ? { $setUnion: [{ $ifNull: ["$completedStepIds", []] }, [stepId]] }
+      : { $ifNull: ["$completedStepIds", []] },
     lastPlayedAtUnix: nowUnix,
     bookRevision: nextBookRev,
     schemaVersion: LESSON_PROGRESS_SCHEMA_VERSION,
-    source: typeof input.source === "string" && input.source.trim() ? input.source.trim() : "roblox",
+    source,
     updatedAtUnix: nowUnix,
+    createdAtUnix: { $ifNull: ["$createdAtUnix", nowUnix] },
   };
+
+  if (hasTotalStepsInput) {
+    setStage.totalStepsKnown = {
+      $max: [{ $ifNull: ["$totalStepsKnown", 0] }, totalStepsKnownInput],
+    };
+  } else {
+    setStage.totalStepsKnown = { $ifNull: ["$totalStepsKnown", null] };
+  }
 
   await coll.updateOne(
     { playerId, bookId, lessonId },
-    {
-      $set: nextDoc,
-      $setOnInsert: { createdAtUnix: nowUnix },
-    },
+    [{ $set: setStage }],
     { upsert: true }
   );
 
